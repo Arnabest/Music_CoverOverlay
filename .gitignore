@@ -1,0 +1,42 @@
+# Build artifacts
+build/
+dist/
+*.exe
+*.spec
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# Runtime data (user-specific, in APPDATA)
+.cover_preferences.json
+.learned_durations.json
+.learned_smtc_features.json
+.wall_snapshots.json
+overlay_config.json
+
+# Logs
+*.log
+
+# Temp files
+新建 文本文档*.txt
+
+# Deep Code (project-level config, keep skills if any)
+.deepcode/settings.json
+
+# Version backups (manual snapshots)
+versions/
+history/
+
+# Test images
+test_*.png
+3.jpg
+4.png
+5.png
+6.png
+cover_crop.png

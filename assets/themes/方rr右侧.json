@@ -1,0 +1,239 @@
+{
+  "window": {
+    "opacity": 1.0,
+    "always_on_top": true,
+    "click_through": false,
+    "scale": 1.0,
+    "background": {
+      "color": "#1a1a2e",
+      "opacity": 0.0
+    }
+  },
+  "animation": {
+    "fade_in_ms": 1100.0,
+    "fade_out_ms": 1300.0,
+    "stay_seconds": 8.0,
+    "stay_forever": true,
+    "fps": "120",
+    "loading_timeout": 8,
+    "renderer": "opengl"
+  },
+  "scene": {
+    "nodes": [
+      {
+        "id": "cover",
+        "type": "cover",
+        "visible": true,
+        "anchor": {
+          "self": "top",
+          "parent": "top"
+        },
+        "offset": {
+          "x": -324.3243243243243,
+          "y": 110.0
+        },
+        "size": 180.0,
+        "shape": "square",
+        "border_radius": 20.0,
+        "feather": 1.6216216216216217,
+        "spin": {
+          "enabled": false,
+          "speed": 18.68918918918919,
+          "direction": "ccw",
+          "acceleration": 2.5
+        },
+        "supersample": "6X",
+        "stroke": {
+          "color": "#ffffff",
+          "width": 0.0
+        }
+      },
+      {
+        "id": "title",
+        "type": "text",
+        "visible": true,
+        "anchor": {
+          "self": "top",
+          "parent": "top"
+        },
+        "offset": {
+          "x": 120.0,
+          "y": 104.05405405405406
+        },
+        "source": "song_name",
+        "font": {
+          "family": "Microsoft YaHei",
+          "size": 18,
+          "bold": true
+        },
+        "color": "#ffffff",
+        "effects": {
+          "outline": {
+            "color": "#000000",
+            "width": 0.0
+          }
+        },
+        "max_width": 650.0,
+        "font_family": "等线 Light",
+        "font_size": 29.0,
+        "font_bold": true,
+        "outline_color": "#000000",
+        "outline_width": 1.0,
+        "alignment": "center"
+      },
+      {
+        "id": "artist",
+        "type": "text",
+        "visible": true,
+        "anchor": {
+          "self": "top",
+          "parent": "top"
+        },
+        "offset": {
+          "x": -3.0,
+          "y": 150.0
+        },
+        "source": "artist_name",
+        "font": {
+          "family": "Microsoft YaHei",
+          "size": 14,
+          "bold": false
+        },
+        "color": "#ffffff",
+        "max_width": 400.0,
+        "effects": {
+          "outline": {
+            "color": "#000000",
+            "width": 0.0
+          }
+        },
+        "font_family": "等线 Light",
+        "font_size": 20.0,
+        "font_bold": true,
+        "outline_color": "#000000",
+        "outline_width": 1.0,
+        "alignment": "center"
+      },
+      {
+        "id": "lyrics",
+        "type": "synced_lyrics",
+        "visible": true,
+        "anchor": {
+          "self": "top",
+          "parent": "top"
+        },
+        "offset": {
+          "x": 0.0,
+          "y": 235.0
+        },
+        "font": {
+          "family": "Arial",
+          "size": 14,
+          "bold": false
+        },
+        "color": "#ffffff",
+        "highlight_color": "#80ffff",
+        "max_lines": "1",
+        "max_width": 400.0,
+        "bilingual": false,
+        "time_offset_ms": 500.0,
+        "font_family": "等线 Light",
+        "font_size": 25.0,
+        "animation": "none",
+        "font_bold": true,
+        "outline_color": "#000000",
+        "outline_width": 1.0,
+        "bilingual_mode": "separate",
+        "trans_color": "#80ffff",
+        "trans_font_size": 25.0,
+        "trans_font_family": "黑体",
+        "alignment": "left"
+      },
+      {
+        "id": "progress",
+        "type": "progress_bar",
+        "visible": true,
+        "anchor": {
+          "self": "top",
+          "parent": "top"
+        },
+        "offset": {
+          "x": 185.0,
+          "y": 198.64864864864865
+        },
+        "mode": "square",
+        "color": "#ffffff",
+        "background_color": "#333355",
+        "width": 3.0,
+        "length_ratio": 1.0,
+        "direction": "cw",
+        "start": "left",
+        "cap": "round",
+        "time_text": {
+          "visible": true,
+          "position": "right",
+          "font": {
+            "family": "Microsoft YaHei UI",
+            "size": 18.0,
+            "bold": false
+          },
+          "color": "#ffffff",
+          "outline_color": "",
+          "outline_width": 1.0,
+          "offset_x": -133.0,
+          "offset_y": -15.0
+        },
+        "cap_style": "round",
+        "start_position": "bottom",
+        "supersample": "6X",
+        "bar": {
+          "length_ratio": 0.6108108108108108,
+          "direction": "lr",
+          "start_position": "left"
+        },
+        "arc": {
+          "start_position": "bottom-left",
+          "direction": "cw",
+          "cap_style": "round",
+          "supersample": "6X",
+          "position": "inside",
+          "distance": 2.7027027027027026
+        }
+      },
+      {
+        "id": "progress_time",
+        "type": "progress_time",
+        "visible": false,
+        "anchor": {
+          "self": "top",
+          "parent": "top"
+        },
+        "offset": {
+          "x": -85.0,
+          "y": 300.0
+        },
+        "font": {
+          "family": "Microsoft YaHei",
+          "size": 10,
+          "bold": false
+        },
+        "color": "#ffffff",
+        "format": "elapsed_total",
+        "separator": " / ",
+        "font_family": "Microsoft YaHei",
+        "font_size": 30.0,
+        "font_bold": true,
+        "outline_color": "#000000",
+        "outline_width": 1.0
+      }
+    ]
+  },
+  "behavior": {
+    "refresh_interval_ms": 20.0,
+    "cover_source_index": 0,
+    "cover_source_name": "SMTC封面 ✓"
+  },
+  "debug": {
+    "show_fps": false
+  }
+}
