@@ -27,11 +27,18 @@ CONFIG_FILE = os.path.join(DATA_DIR, "overlay_config.json")
 THEMES_DIR = os.path.join(APP_DIR, "assets", "themes")
 FONTS_DIR = os.path.join(APP_DIR, "assets", "fonts")
 
+# ★ Config schema version — bump when DEFAULT_CONFIG structure changes.
+# Migrations are applied in _migrate_config() on load.
+CONFIG_VERSION = 1
+
 # ============================================================
 # Default config — nested, declarative, self-documenting
 # ============================================================
 
 DEFAULT_CONFIG: dict[str, Any] = {
+    # ---- Schema ----
+    "_config_version": CONFIG_VERSION,  # ★ auto-migrated on load
+
     # ---- Window ----
     "window": {
         "position": {"x": 100, "y": 100},
@@ -285,8 +292,24 @@ def load_config(path: str | None = None) -> dict:
         elif old == "netease":
             behavior["detection_priority"] = ["netease"]
         # "auto" → keep default ["qqmusic", "netease"]
+    # Migrate: apply version-specific migrations
+    _migrate_config(config)
     return config
 
+
+def _migrate_config(config: dict) -> None:
+    """Apply version-specific migrations to bring old configs up to date.
+
+    Add new entries here when DEFAULT_CONFIG changes:
+        if version < 2:
+            # migration logic
+            version = 2
+        config["_config_version"] = CONFIG_VERSION
+    """
+    version = config.get("_config_version", 0)
+    if version < 1:
+        version = 1
+    config["_config_version"] = CONFIG_VERSION
 
 def _migrate_nodes(config: dict) -> None:
     """Ensure all default node IDs are present and anchors are independent (absolute)."""

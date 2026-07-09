@@ -38,6 +38,8 @@ class ProgressTracker:
         self._lock_pos: float = 0.0   # SMTC position at lock
         self._lock_wall: float = 0.0  # wall-clock at lock
         self._lock_at: float = 0.0    # wall-clock timestamp of lock (Bug #168)
+        # Frame skip after reset (Bug #170 / HC-012)
+        self._skip_wall_lock_frames: int = 0
         # Pause/resume
         self._was_paused: bool = False
         self._paused_at: float = 0.0
@@ -67,6 +69,7 @@ class ProgressTracker:
         self._lock_pos = 0.0
         self._lock_wall = 0.0
         self._lock_at = 0.0
+        self._skip_wall_lock_frames = 3  # ★ Bug #170 / HC-012: skip 3 frames after reset
         self._was_paused = False
         self._paused_at = 0.0
         self._last_change_wall = 0.0
@@ -214,14 +217,21 @@ class ProgressTracker:
                     elif smtc_active:
                         self.position = s_pos
                         self._song_start = time.time() - s_pos
-                        if prev > 0 and s_pos < 2.0:
+                        # ★ Bug #170 / HC-012: skip wall-lock detection for
+                        # 3 frames after reset() to let SMTC switch to new song.
+                        if self._skip_wall_lock_frames > 0:
+                            self._skip_wall_lock_frames -= 1
+                        elif prev > 0 and s_pos < 2.0:
                             self._locked = True
                             self._lock_pos = prev
                             self._lock_wall = _wall
                             self._lock_at = _wall
                     else:
                         self.position = _wall
-                        if prev > 0 and s_pos < 2.0 and _wall > 10:
+                        # ★ Bug #170 / HC-012: same guard in wall-clock path.
+                        if self._skip_wall_lock_frames > 0:
+                            self._skip_wall_lock_frames -= 1
+                        elif prev > 0 and s_pos < 2.0 and _wall > 10:
                             self._locked = True
                             self._lock_pos = prev
                             self._lock_wall = _wall
