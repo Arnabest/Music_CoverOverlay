@@ -148,7 +148,7 @@ def main():
     log("\n--- PHASE 1: Session Enumeration Approaches ---")
     enum_results = try_enumerate_sessions(mgr)
     for name, result, ok in enum_results:
-        status = "✓" if ok else "✗"
+        status = "[OK]" if ok else "[FAIL]"
         log(f"  {status} {name}: {result}")
 
     # ---- PHASE 2: Current session deep dive ----

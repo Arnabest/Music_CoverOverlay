@@ -339,7 +339,7 @@ class GLRenderEngine:
         self._window = pyglet.window.Window(
             width=self.width,
             height=self.height,
-            caption="QQMusic Overlay NG",
+            caption="Music CoverOverlay",
             style=pyglet.window.Window.WINDOW_STYLE_BORDERLESS,
             config=gl_config,
             vsync=False,
@@ -1158,11 +1158,21 @@ class GLRenderEngine:
                 # update (not the GL render) keeps the cache clean while
                 # ensuring the DIB and progress tracker stay fresh so
                 # rendering resumes immediately on show().
+                _ulw_submitted = False
                 if not self._is_window_hidden:
                     _user32.UpdateLayeredWindowIndirect(
                         ctypes.c_void_p(self._hwnd),
                         ctypes.byref(self._ulw_info),
                     )
+                    _ulw_submitted = True
+                _gl_log.rate_limited(
+                    "ulw_submit_branch", 2.0, "INFO",
+                    f"ULW_FRAME submitted={_ulw_submitted} "
+                    f"hidden={self._is_window_hidden} "
+                    f"dirty={'NULL' if self._ulw_info.prcDirty is None else 'SET'} "
+                    f"alpha={global_alpha} "
+                    f"pos={float(data.get('progress_pos') or 0.0):.1f}s "
+                    f"dur={float(data.get('progress_dur') or 0.0):.1f}s")
 
             glBindFramebuffer(GL_FRAMEBUFFER, 0)
             _t_done = time.time()
@@ -1352,13 +1362,13 @@ class GLRenderEngine:
         for eid, lb in _LABELS.items():
             node = self.scene.get(eid)
             visible = node.visible if node else True
-            items.append((f"  {'✓' if visible else '☐'} {lb}",
+            items.append((f"  {'[x]' if visible else '[ ]'} {lb}",
                           lambda eid=eid: self._menu_toggle_element(eid), False))
         items.append(("---", None, False))
         items.append(("  歌曲信息", lambda: self._menu_song_info(screen_x, screen_y), False))
-        items.append((f"  {'✓' if self.always_on_top else '☐'} 窗口置顶",
+        items.append((f"  {'[x]' if self.always_on_top else '[ ]'} 窗口置顶",
                       self._menu_toggle_topmost, False))
-        items.append((f"  {'✓' if self.click_through else '☐'} 鼠标穿透",
+        items.append((f"  {'[x]' if self.click_through else '[ ]'} 鼠标穿透",
                       self._menu_toggle_clickthrough, False))
         items.append(("---", None, False))
         items.append(("  退出", self._menu_exit, False))

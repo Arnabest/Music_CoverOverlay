@@ -91,12 +91,12 @@ def main():
 
     if stats["default_cover"] > 0:
         rate = stats["default_cover"] / max(stats["song_changes"], 1) * 100
-        print(f"\n  ⚠ Default cover rate: {rate:.0f}%")
+        print(f"\n  [WARN] Default cover rate: {rate:.0f}%")
         if rate > 5:
-            print("  → Exceeds 5% threshold — investigate reader.py COVER logs")
+            print("  -> Exceeds 5% threshold - investigate reader.py COVER logs")
         sys.exit(1)
     else:
-        print("\n  ✓ No default cover fallbacks detected")
+        print("\n  [OK] No default cover fallbacks detected")
         sys.exit(0)
 
 

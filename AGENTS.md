@@ -1,7 +1,7 @@
-# QQMusicOverlay NG — Agent Instructions
+# Music CoverOverlay (Music_CoverOverlay) — Agent Instructions
 
 **源码目录**: `F:\desktop on f\QQMusicOverlayNG\`
-**安装/分发目录**: `D:\QQMusicOverlay NG\`
+**安装/分发目录**: `D:\Music CoverOverlay\`（原 `D:\QQMusicOverlay NG\`）
 **AI Box 知识系统**: `D:\AI Box\`
 
 ---
@@ -16,27 +16,31 @@
 
 ## 项目概述
 
-QQMusicOverlay NG — Windows 桌面音乐浮层。在桌面上叠加显示当前播放歌曲的封面、进度、歌词等信息。
+Music CoverOverlay（项目名 `Music_CoverOverlay`）— 适用于 QQ Music 和 NetEase Cloud Music 的封面悬浮窗程序。在桌面上叠加显示当前播放歌曲的封面、进度、歌词等信息。
 
-- **技术栈**: Python 3.14 + pyglet + OpenGL + Win32 API + tkinter
-- **入口**: 托盘常驻程序，`python main.py` 启动
-- **构建**: `python build.py` → PyInstaller + Inno Setup 6
+- **技术栈**: Python 3.10~3.14 + pyglet + OpenGL + Win32 API + tkinter
+- **入口**: 托盘常驻程序，`python main.py` 或 `run.bat` 启动
+- **构建**: `python build.py` → PyInstaller + Inno Setup 6 (`Music_CoverOverlay.spec`)
 - **配置**: `overlay_config.json`
-- **数据**: `%APPDATA%\QQMusicOverlayNG\`
+- **数据**: `%APPDATA%\Music_CoverOverlay\` (兼容 `%APPDATA%\QQMusicOverlayNG\`)
 
 ## 项目结构
 
 ```
 ├── main.py              ← 入口：进程清理 + DPI + 启动序列
+├── run.bat              ← 便捷启动脚本
 ├── config.py            ← 声明式配置 schema
 ├── version.py           ← 版本号 + stamp_build()
-├── build.py             ← PyInstaller 构建脚本
+├── build.py             ← PyInstaller + Inno Setup 构建脚本
+├── Music_CoverOverlay.spec ← PyInstaller 配置文件
+├── setup.iss            ← Inno Setup 6 安装包配置
 ├── core/                ← 数据层：reader, smtc_engine, progress, lyrics...
 ├── render/              ← OpenGL 渲染：gl_engine, painter, compositor, text...
 ├── scene/               ← 场景图：graph, node, nodes, layout
 ├── animation/           ← 动画/状态机：state_machine, timeline, transitions
 ├── ui/                  ← 用户界面：window, settings, tray, monitor
 ├── debug/               ← 诊断工具
+├── tests/               ← 测试用例与测试夹具
 └── dist/                ← PyInstaller 构建输出
 ```
 
@@ -81,3 +85,10 @@ Get-Content $env:TEMP\qqoverlay_errors.log -Tail 10
 # 独立监控
 python ui\monitor.py
 ```
+
+## 自动打包规则
+
+- 只要任务修改了源码、配置、构建脚本或会影响运行行为的项目文档，在最终回复前必须自动执行 `python build.py --quick`。
+- 打包完成后必须核对 `dist\Music_CoverOverlay\Music_CoverOverlay.exe`、`Music_CoverOverlay_Setup.exe` 以及版本号安装包是否已更新，并在回复中给出路径。
+- 自动打包不等于自动安装；除非用户明确要求安装，否则不要写入 `D:\Music CoverOverlay\` 或 `D:\QQMusicOverlay NG\`。
+- 纯诊断、只读审计、纯聊天或用户明确要求不打包时，可以跳过，但需要在回复中说明原因。

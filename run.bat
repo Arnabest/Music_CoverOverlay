@@ -1,6 +1,6 @@
-﻿@echo off
+@echo off
 cd /d "%~dp0"
-title QQMusic Overlay NG
+title Music CoverOverlay
 
 REM Python 3.14+ uses mimalloc by default, which can cause
 REM "unable to alloc" crashes on some Windows configurations.
@@ -16,12 +16,12 @@ if "%PY%"=="" (
 
 if "%PY%"=="" (
     echo [ERROR] Python not found
-    echo Install Python 3.13+ or edit this file to set the correct path.
+    echo Install Python 3.10+ or edit this file to set the correct path.
     pause
     exit /b 1
 )
 
-echo QQMusic Overlay NG Starting...
+echo Starting Music CoverOverlay...
 echo Python: %PY%
 echo.
 
@@ -31,8 +31,8 @@ echo.
 echo Exit code: %ERRORLEVEL%
 if %ERRORLEVEL% neq 0 (
     echo.
-    echo If the window did not appear, check the log file:
-    echo %TEMP%\qqoverlay_ng.log
+    echo If the overlay closed unexpectedly, check log files in:
+    echo %TEMP%\qqoverlay_*.log
     pause
 )
 exit /b %ERRORLEVEL%

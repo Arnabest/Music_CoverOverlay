@@ -47,10 +47,11 @@ class OverlayWindow:
         return getattr(self.engine, 'root', None)
 
     def __init__(self, config: dict, reader: QQMusicReader, status: dict | None = None,
-                 smtc_engine=None):
+                 smtc_engine=None, runtime_api=None):
         self.config = config
         self.reader = reader
         self._status = status or {}
+        self._runtime_api = runtime_api
 
         # Scene
         self.scene = SceneGraph()
@@ -186,6 +187,50 @@ class OverlayWindow:
         # Update engine callback now that tray_refresh is available
         self.engine.set_callbacks(tray_refresh=cb)
 
+    def _publish_runtime_state(self, now: float | None = None) -> None:
+        runtime_api = self._runtime_api
+        if runtime_api is None:
+            return
+        now = time.time() if now is None else now
+        last_pub = getattr(self, "_last_runtime_state_pub", 0.0)
+        if now - last_pub < 0.25:
+            return
+        try:
+            player = self._smtc_engine.player if self._smtc_engine else ""
+        except Exception:
+            player = ""
+        try:
+            playback_status = self._smtc_engine.playback_status if self._smtc_engine else ""
+        except Exception:
+            playback_status = ""
+        payload = {
+            "schema": 1,
+            "app": "QQMusicOverlayNG",
+            "source": "runtime_api",
+            "updated_at_epoch": now,
+            "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "title": self.reader.song_name or "",
+            "artist": self.reader.artist_name or "",
+            "album": "",
+            "player": player or "",
+            "playback_status": playback_status or "",
+            "overlay_state": self._state.state.value,
+            "is_paused": bool(self.progress.is_paused),
+            "playing": bool(self.reader.is_playing),
+            "position_sec": float(self.progress.position or 0.0),
+            "duration_sec": float(self.progress.duration or 0.0),
+            "progress": (
+                float(self.progress.position or 0.0) / float(self.progress.duration or 0.0)
+                if float(self.progress.duration or 0.0) > 0
+                else 0.0
+            ),
+            "no_timeline": bool(self.progress.no_timeline),
+            "always_on_top": bool(self.config.get("window", {}).get("always_on_top", True)),
+            "click_through": bool(self.config.get("window", {}).get("click_through", False)),
+        }
+        runtime_api.update(payload)
+        self._last_runtime_state_pub = now
+
 
     # ================================================================
     # Per-frame update (called by engine before render)
@@ -231,11 +276,11 @@ class OverlayWindow:
                 self._no_timeline_force_hide = True  # default: hide
                 lines = "当前播放源不支持以下功能：\n\n"
                 for i, m in enumerate(missing, 1):
-                    lines += f"  ❌ {m}\n"
+                    lines += f"  - {m}\n"
                 lines += "\n是否自动关闭相关显示选项？\n\n"
-                lines += "　是 — 自动隐藏（推荐）\n"
-                lines += "　否 — 保持显示\n\n"
-                lines += "💡 设置 → 来源 → 不再提示 可永久关闭"
+                lines += "  是 — 自动隐藏（推荐）\n"
+                lines += "  否 — 保持显示\n\n"
+                lines += "提示：设置 → 来源 → 不再提示 可永久关闭"
 
                 import ctypes as _ct
                 import threading as _thr
@@ -243,7 +288,7 @@ class OverlayWindow:
                     try:
                         r = _ct.windll.user32.MessageBoxW(
                             0, lines,
-                            "QQMusicOverlay NG — 功能缺失",
+                            "Music CoverOverlay — 功能缺失",
                             0x40 | 0x4)
                         self._no_timeline_force_hide = (r == 6)
                         if self._no_timeline_force_hide:
@@ -339,6 +384,7 @@ class OverlayWindow:
                 is_player_running=(is_playing or self.reader.is_playing),
                 song_name=self.reader.song_name,
             )
+        self._publish_runtime_state(now)
 
         # ★ Auto-show on startup when stay_forever is enabled.
         # Suppressed when user manually hid the window via tray menu.
@@ -814,7 +860,7 @@ class OverlayWindow:
 
         idx = self.config.get("behavior", {}).get("cover_source_index", 0)
         auto_idx = getattr(self.reader, 'auto_cover_index', -1)
-        if idx == 0 and auto_idx >= 0:
+        if idx == 0:
             idx = auto_idx
         cover = self.reader.get_selected_cover(idx)
 
@@ -1040,6 +1086,12 @@ class OverlayWindow:
         if self._state.is_transitioning() and self._active_data is not None:
             _pos = self._active_data.get("progress_pos", 0)
             _dur = self._active_data.get("progress_dur", 0)
+            _window_logger.rate_limited(
+                "provide_progress_snapshot", 2.0, "INFO",
+                f"PROVIDE_PROGRESS source=snapshot state={self._state.state.name} "
+                f"out_pos={float(_pos or 0.0):.1f}s out_dur={float(_dur or 0.0):.1f}s "
+                f"live_pos={self.progress.position:.1f}s live_dur={self.progress.duration:.1f}s "
+                f"paused={self.progress.is_paused}")
             return {
                 # ★ Frozen song metadata + progress — the snapshot
                 # captured in _handle_song_change (Phase 1) or
@@ -1073,10 +1125,10 @@ class OverlayWindow:
         cfg_idx = self.config.get("behavior", {}).get("cover_source_index", 0)
         auto_idx = getattr(self.reader, 'auto_cover_index', -1)
         if cfg_idx == 0:
-            idx = auto_idx if auto_idx >= 0 else 0
+            idx = auto_idx
         else:
             pref_name = self.config.get("behavior", {}).get("cover_source_name", "")
-            idx = auto_idx if auto_idx >= 0 else 0
+            idx = auto_idx
             if pref_name:
                 candidates = self.reader.cover_candidates
                 for i, (name, _) in enumerate(candidates):
@@ -1125,6 +1177,13 @@ class OverlayWindow:
                 f"timed_len={len(_lyrics_t)} merged_len={len(_lyrics_m)} "
                 f"timed_first={_lyrics_t[0] if _lyrics_t else 'nil'} "
                 f"paused={self.progress.is_paused}")
+        _window_logger.rate_limited(
+            "provide_progress_live", 2.0, "INFO",
+            f"PROVIDE_PROGRESS source=live state={self._state.state.name} "
+            f"out_pos={float(_pos or 0.0):.1f}s out_dur={float(_dur or 0.0):.1f}s "
+            f"live_pos={self.progress.position:.1f}s live_dur={self.progress.duration:.1f}s "
+            f"force_zero={self._force_progress_zero} paused={self.progress.is_paused} "
+            f"no_timeline={self.progress.no_timeline}")
         return {
             "cover_image": cover,
             "song_name": self.reader.song_name,

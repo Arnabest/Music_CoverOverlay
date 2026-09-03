@@ -8,9 +8,13 @@ Format: YYYY.MM.DD.build — e.g. "2026.06.27.1625"
 import datetime
 import os
 
+APP_NAME = "Music_CoverOverlay"
+APP_DISPLAY_NAME = "Music CoverOverlay"
+APP_DESCRIPTION = "适用于QQ Music和NetEase Cloud Music的封面悬浮窗程序"
+
 # ---- Build metadata (updated automatically before each build) ----
-BUILD_VERSION = "2026.06.27.1628"    # YYYY.MM.DD.HHMM (auto-stamped)
-BUILD_DISPLAY  = "v6.27 Beta"       # Human-readable version string
+BUILD_VERSION = "2026.07.13.0405"    # YYYY.MM.DD.HHMM (auto-stamped)
+BUILD_DISPLAY  = "v7.13 Beta"       # Human-readable version string
 BUILD_STAGE    = "beta"              # dev | alpha | beta | stable
 
 # ---- Auto-detect from file modification time as fallback ----
@@ -25,7 +29,7 @@ def _detect_build_time() -> str:
 
 def get_version() -> str:
     """Return the full version string for display."""
-    return f"QQMusicOverlay NG {BUILD_DISPLAY} (build {BUILD_VERSION})"
+    return f"Music CoverOverlay {BUILD_DISPLAY} (build {BUILD_VERSION})"
 
 
 def get_short_version() -> str:

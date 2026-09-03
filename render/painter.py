@@ -30,6 +30,9 @@ from render.text import get_text_renderer
 from render.spin_controller import SpinController
 from core.progress import format_time
 from core.constants import ARC_CACHE_MAX, ARC_CACHE_EVICT
+from core.logs import get_logger
+
+_render_log = get_logger("render")
 
 
 # ============================================================
@@ -459,7 +462,9 @@ class Painter:
     _time_tex_garbage: list = []
 
     def _get_time_texture(self, text: str, font_family: str, font_size: int,
-                          font_bold: bool, color_rgb: tuple) -> tuple[int, int, int]:
+                          font_bold: bool, color_rgb: tuple,
+                          outline_width: int = 0,
+                          outline_rgb: tuple = (0, 0, 0)) -> tuple[int, int, int]:
         """Render time text to PIL, upload to a NEW GL texture each call.
 
         Returns (tex_id, tex_w, tex_h).  Each call creates a fresh texture
@@ -469,11 +474,53 @@ class Painter:
         """
         import PIL.Image, PIL.ImageDraw
         font = self._text_renderer.get_font(font_family, font_size, font_bold)
-        bbox = font.getbbox(text)
-        tw, th = bbox[2] - bbox[0] + 8, bbox[3] - bbox[1] + 8
+        outline_width = max(0, int(outline_width))
+        probe = PIL.Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+        probe_draw = PIL.ImageDraw.Draw(probe)
+        try:
+            bbox = probe_draw.textbbox((0, 0), text, font=font,
+                                       stroke_width=outline_width)
+        except TypeError:
+            bbox = font.getbbox(text)
+            if outline_width > 0:
+                bbox = (
+                    bbox[0] - outline_width,
+                    bbox[1] - outline_width,
+                    bbox[2] + outline_width,
+                    bbox[3] + outline_width,
+                )
+        pad = 4
+        tw = bbox[2] - bbox[0] + pad * 2
+        th = bbox[3] - bbox[1] + pad * 2
         img = PIL.Image.new("RGBA", (max(10, tw), max(10, th)), (0, 0, 0, 0))
         draw = PIL.ImageDraw.Draw(img)
-        draw.text((4, 4), text, fill=color_rgb + (255,), font=font)
+        draw_x = pad - bbox[0]
+        draw_y = pad - bbox[1]
+        draw_kwargs = {
+            "fill": color_rgb + (255,),
+            "font": font,
+        }
+        if outline_width > 0:
+            try:
+                draw.text(
+                    (draw_x, draw_y), text,
+                    stroke_width=outline_width,
+                    stroke_fill=outline_rgb + (255,),
+                    **draw_kwargs,
+                )
+            except TypeError:
+                for dx in range(-outline_width, outline_width + 1):
+                    for dy in range(-outline_width, outline_width + 1):
+                        if dx == 0 and dy == 0:
+                            continue
+                        draw.text(
+                            (draw_x + dx, draw_y + dy), text,
+                            fill=outline_rgb + (255,),
+                            font=font,
+                        )
+                draw.text((draw_x, draw_y), text, **draw_kwargs)
+        else:
+            draw.text((draw_x, draw_y), text, **draw_kwargs)
         img = img.transpose(PIL.Image.FLIP_TOP_BOTTOM)
         if img.mode != "RGBA":
             img = img.convert("RGBA")
@@ -524,9 +571,17 @@ class Painter:
         font_size = int(node.data.get("font_size", 10))
         font_bold = node.data.get("font_bold", False)
         color_rgb = self._hex_to_rgb(node.data.get("color", "#cccccc"))
+        outline_color = node.data.get("outline_color", "")
+        outline_width = int(float(node.data.get("outline_width", 0)))
+        if outline_width > 0 and not outline_color:
+            outline_color = "#000000"
+        outline_rgb = self._hex_to_rgb(outline_color) if outline_width > 0 else (0, 0, 0)
 
         tex_id, tex_w, tex_h = self._get_time_texture(
-            text, font_family, font_size, font_bold, color_rgb)
+            text, font_family, font_size, font_bold, color_rgb,
+            outline_width=outline_width, outline_rgb=outline_rgb)
+        self._diag_time_text("standalone", text, pos, dur, tex_id, tex_w, tex_h,
+                             node.abs_x, node.abs_y, node)
         self._draw_textured_quad_at(
             node.abs_x, node.abs_y, tex_w, tex_h, tex_id, node.opacity)
 
@@ -1072,10 +1127,17 @@ class Painter:
         font_family = time_cfg.get("font", {}).get("family") or node.data.get("time_font_family", "Microsoft YaHei")
         font_size = int(time_cfg.get("font", {}).get("size",
                         node.data.get("time_font_size") or node.data.get("font_size", 10)))
+        outline_color = time_cfg.get("outline_color", "")
+        outline_width = int(float(time_cfg.get("outline_width", 0)))
+        if outline_width > 0 and not outline_color:
+            outline_color = "#000000"
+        outline_rgb = self._hex_to_rgb(outline_color) if outline_width > 0 else (0, 0, 0)
 
-        # ★ Use raw PIL + cache (same proven path as arc textures, not TextRenderer)
+        # Pre-composite outline into the time texture so both bar time text
+        # and standalone progress_time use the same reliable outline path.
         tex_id, tex_w, tex_h = self._get_time_texture(
-            time_text, font_family, font_size, False, color_rgb)
+            time_text, font_family, font_size, False, color_rgb,
+            outline_width=outline_width, outline_rgb=outline_rgb)
 
         # ★ Arc/ring mode: position time text relative to cover, not progress node
         if mode in ("arc", "ring"):
@@ -1126,19 +1188,31 @@ class Painter:
         # ★ Fine-tune offset
         tx += int(float(time_cfg.get("offset_x", 0)))
         ty += int(float(time_cfg.get("offset_y", 0)))
-        # ★ Time text outline — use same cache path for outline texture
-        outline_color = time_cfg.get("outline_color", "")
-        outline_width = int(float(time_cfg.get("outline_width", 0)))
-        if outline_width > 0:
-            if not outline_color:
-                outline_color = "#000000"
-            outline_rgb = self._hex_to_rgb(outline_color)
-            outline_tex_id, _, _ = self._get_time_texture(
-                time_text, font_family, font_size, False, outline_rgb)
-            self._draw_with_outline_at(tx, ty, tex_w, tex_h, tex_id,
-                                       outline_tex_id, outline_width, node.opacity)
+        self._diag_time_text("embedded", time_text, pos, dur, tex_id, tex_w, tex_h,
+                             tx, ty, node)
+        self._draw_textured_quad_at(tx, ty, tex_w, tex_h, tex_id, node.opacity)
+
+    def _diag_time_text(self, kind: str, text: str, pos: float, dur: float,
+                        tex_id: int, tex_w: int, tex_h: int,
+                        x: float, y: float, node) -> None:
+        """Low-rate diagnostics for the time-text render branch."""
+        attr = f"_diag_{kind}_time_text"
+        changed = text != getattr(self, attr, None)
+        if changed:
+            setattr(self, attr, text)
+            _render_log.info(
+                f"TIME_TEXT_CHANGE kind={kind} node={getattr(node, 'id', '?')} "
+                f"text={text!r} pos={pos:.1f}s dur={dur:.1f}s "
+                f"tex={tex_id}:{tex_w}x{tex_h} xy=({x:.1f},{y:.1f}) "
+                f"visible={getattr(node, 'visible', None)} "
+                f"opacity={getattr(node, 'opacity', 0.0):.3f}")
         else:
-            self._draw_textured_quad_at(tx, ty, tex_w, tex_h, tex_id, node.opacity)
+            _render_log.rate_limited(
+                f"time_text_{kind}_stable", 2.0, "INFO",
+                f"TIME_TEXT_STABLE kind={kind} node={getattr(node, 'id', '?')} "
+                f"text={text!r} pos={pos:.1f}s dur={dur:.1f}s "
+                f"tex={tex_id}:{tex_w}x{tex_h} xy=({x:.1f},{y:.1f}) "
+                f"opacity={getattr(node, 'opacity', 0.0):.3f}")
 
     def _update_cover_spin(self, node, spin_cfg: dict | None = None):
         if spin_cfg is None:
@@ -1387,6 +1461,14 @@ class Painter:
         _last = getattr(self, '_last_setdata_pos', -999)
         if _new_pos >= 0 and abs(_new_pos - _last) > 0.8:
             self._last_setdata_pos = _new_pos
+            _render_log.rate_limited(
+                "painter_set_data_progress", 1.0, "INFO",
+                f"PAINTER_DATA pos={float(_new_pos):.1f}s "
+                f"dur={float(kwargs.get('progress_dur') or 0.0):.1f}s "
+                f"progress={float(kwargs.get('progress') or 0.0):.4f} "
+                f"paused={kwargs.get('is_paused')} "
+                f"animating={kwargs.get('is_animating')} "
+                f"no_timeline={kwargs.get('no_timeline')}")
 
     def _get_cover_image(self):      return self._cover_image
     def _get_text_content(self, node):

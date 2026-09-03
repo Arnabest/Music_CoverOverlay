@@ -139,12 +139,12 @@ class QQMusicReader:
             img = self._cover_image
             if img is not None:
                 return img
-            # Fallback: use best candidate from local cache
+            # Only expose a gathered candidate when auto-selection has
+            # positively identified one. Do not silently treat candidate[0]
+            # as correct; that can surface a wrong same-artist local cover.
             candidates = getattr(self, "_cover_candidates", None)
-            if candidates:
-                idx = getattr(self, "_auto_cover_index", 0)
-                if idx < 0 or idx >= len(candidates):
-                    idx = 0
+            idx = getattr(self, "_auto_cover_index", -1)
+            if candidates and 0 <= idx < len(candidates):
                 return candidates[idx][1] if candidates[idx][1] else None
         return None
 
@@ -273,7 +273,8 @@ class QQMusicReader:
             if candidates and not self._cover_is_stale:
                 if 0 <= index < len(candidates):
                     return candidates[index][1]
-                return candidates[0][1]
+                if index >= 0:
+                    return candidates[0][1]
             img = self._cover_image
             # ★ Also skip stale _cover_image
             if img is not None and not self._cover_is_stale:
@@ -905,7 +906,7 @@ class QQMusicReader:
                         if _is_netease and not (title_match or artist_match):
                             _reader_log(f"SMTC ACCEPTED (netease fallback) "
                                        f"title={smtc_title!r} cur={cur_song!r}")
-                        candidates.append(("SMTC封面 ✓", thumb.copy()))
+                        candidates.append(("SMTC封面 [OK]", thumb.copy()))
                         smtc_gathered = True
                         smtc_verified = True
                         if title_match or artist_match:
@@ -1210,10 +1211,11 @@ class QQMusicReader:
                        f"(score={best_score})")
             return best_idx
 
-        # ★ Fallback: first available candidate
-        _reader_log(f"auto_match: fallback → Candidate[0] {candidates[0][0]!r} "
-                   f"(no SMTC, no API, best_local_score={best_score})")
-        return 0 if candidates else -1
+        # No reliable evidence: keep the placeholder instead of auto-using an
+        # unrelated same-artist local cover.
+        _reader_log("auto_match: no reliable SMTC/API/local match "
+                   f"(best_local_score={best_score}) → placeholder")
+        return -1
 
     # ---- Lyrics helpers ----
     @staticmethod

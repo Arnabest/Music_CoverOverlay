@@ -356,7 +356,7 @@ class RenderEngine:
         for eid, lb in _LABELS.items():
             visible = self._get_node_visible(eid)
             menu.add_command(
-                label=f"  {'✓' if visible else '☐'} {lb}",
+                label=f"  {'[x]' if visible else '[ ]'} {lb}",
                 command=lambda eid=eid: self._menu_toggle_element(eid))
 
         menu.add_separator()

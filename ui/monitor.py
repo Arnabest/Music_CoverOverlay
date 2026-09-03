@@ -241,8 +241,8 @@ class TrayDiagData:
         m = TRAY_CLICK_RE.search(line)
         if m:
             cmd, ah, gl = m.group(1), m.group(2), m.group(3)
-            self.action_handler_status = "✓ 已连接" if ah == "SET" else "✗ 未连接"
-            self.gl_queue_status = "✓ 已连接" if gl == "SET" else "✗ 未连接"
+            self.action_handler_status = "[已连接]" if ah == "SET" else "[未连接]"
+            self.gl_queue_status = "[已连接]" if gl == "SET" else "[未连接]"
             self.clicks.append(
                 f"[{datetime.datetime.now():%H:%M:%S}] {cmd} "
                 f"(handler={ah}, gl_queue={gl})")
@@ -760,7 +760,7 @@ class MonitorWindow:
 
         # Check staleness
         if self._fps_data.last_ts and time.time() - self._fps_data.last_ts > 3:
-            self._fps_stale.config(text="⚠ FPS 数据停滞 — 渲染循环可能已停摆")
+            self._fps_stale.config(text="[!] FPS 数据停滞 — 渲染循环可能已停摆")
         else:
             self._fps_stale.config(text="")
 

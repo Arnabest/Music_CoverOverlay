@@ -1,0 +1,238 @@
+{
+  "_config_version": 1,
+  "window": {
+    "position": {
+      "x": 100,
+      "y": 100
+    },
+    "size": {
+      "width": 400,
+      "height": 550
+    },
+    "opacity": 0.85,
+    "always_on_top": true,
+    "click_through": false,
+    "scale": 1.0,
+    "background": {
+      "color": "#1a1a2e",
+      "opacity": 1.0
+    }
+  },
+  "animation": {
+    "fade_in_ms": 800,
+    "fade_out_ms": 800,
+    "stay_seconds": 8,
+    "stay_forever": true,
+    "fps": 60,
+    "continuous_fps_mode": "eco",
+    "continuous_fps_cap": 45,
+    "fullscreen_eco_mode": "pause",
+    "loading_timeout": 8,
+    "renderer": "pil"
+  },
+  "scene": {
+    "nodes": [
+      {
+        "id": "cover",
+        "type": "cover",
+        "visible": true,
+        "anchor": {
+          "self": "top",
+          "parent": "top"
+        },
+        "offset": {
+          "x": 0,
+          "y": 20
+        },
+        "size": 180,
+        "shape": "circle",
+        "border_radius": 20,
+        "feather": 5,
+        "supersample": "2X",
+        "stroke": {
+          "color": "",
+          "width": 0
+        },
+        "spin": {
+          "enabled": true,
+          "speed": 30,
+          "direction": "cw",
+          "spin_duration": 2.5,
+          "stop_duration": 1.5,
+          "pause_spin": true,
+          "wait_spin_on_change": false
+        },
+        "effects": {
+          "cd_groove": {
+            "enabled": false,
+            "intensity": 0.5,
+            "frequency": 80
+          },
+          "motion_blur": {
+            "enabled": false,
+            "intensity": 0.5
+          },
+          "specular": {
+            "enabled": false,
+            "intensity": 0.6
+          }
+        }
+      },
+      {
+        "id": "title",
+        "type": "text",
+        "visible": true,
+        "anchor": {
+          "self": "top",
+          "parent": "top"
+        },
+        "offset": {
+          "x": 0,
+          "y": 212
+        },
+        "source": "song_name",
+        "font": {
+          "family": "Microsoft YaHei",
+          "size": 18,
+          "bold": true
+        },
+        "color": "#ffffff",
+        "effects": {
+          "outline": {
+            "color": "#232323",
+            "width": 1
+          }
+        },
+        "max_width": 350
+      },
+      {
+        "id": "artist",
+        "type": "text",
+        "visible": true,
+        "anchor": {
+          "self": "top",
+          "parent": "top"
+        },
+        "offset": {
+          "x": 0,
+          "y": 268
+        },
+        "source": "artist_name",
+        "font": {
+          "family": "Microsoft YaHei",
+          "size": 14,
+          "bold": false
+        },
+        "color": "#aaccff",
+        "max_width": 350
+      },
+      {
+        "id": "lyrics",
+        "type": "synced_lyrics",
+        "visible": true,
+        "anchor": {
+          "self": "top",
+          "parent": "top"
+        },
+        "offset": {
+          "x": 0,
+          "y": 320
+        },
+        "font": {
+          "family": "Microsoft YaHei",
+          "size": 14,
+          "bold": false
+        },
+        "color": "#cccccc",
+        "highlight_color": "#88ccff",
+        "max_lines": 1,
+        "max_width": 350,
+        "bilingual": true,
+        "alignment": "center",
+        "time_offset_ms": 0
+      },
+      {
+        "id": "progress",
+        "type": "progress_bar",
+        "visible": true,
+        "anchor": {
+          "self": "top",
+          "parent": "top"
+        },
+        "offset": {
+          "x": 0,
+          "y": 390
+        },
+        "mode": "bar",
+        "color": "#44cc88",
+        "background_color": "#333355",
+        "width": 4,
+        "bar": {
+          "length_ratio": 0.7,
+          "direction": "lr",
+          "start_position": "left"
+        },
+        "arc": {
+          "start_position": "top",
+          "direction": "cw",
+          "cap_style": "round",
+          "supersample": "2X",
+          "position": "edge",
+          "distance": 0
+        },
+        "time_text": {
+          "visible": true,
+          "position": "bottom",
+          "offset_x": 0,
+          "offset_y": 0,
+          "font": {
+            "family": "Microsoft YaHei",
+            "size": 8,
+            "bold": false
+          },
+          "color": "#cccccc",
+          "outline_color": "",
+          "outline_width": 0
+        }
+      },
+      {
+        "id": "progress_time",
+        "type": "progress_time",
+        "visible": true,
+        "anchor": {
+          "self": "top",
+          "parent": "top"
+        },
+        "offset": {
+          "x": 0,
+          "y": 426
+        },
+        "font": {
+          "family": "Microsoft YaHei",
+          "size": 10,
+          "bold": false
+        },
+        "color": "#cccccc",
+        "format": "elapsed_total",
+        "separator": " / "
+      }
+    ]
+  },
+  "behavior": {
+    "qqmusic_picture_dir": "",
+    "refresh_interval_ms": 100,
+    "cover_source_index": 0,
+    "cover_source_name": "",
+    "current_theme": "",
+    "max_log_lines": 500,
+    "detection_priority": [
+      "qqmusic",
+      "netease"
+    ],
+    "lyrics_source_priority": "qq_first",
+    "suppress_missing_warnings": false
+  },
+  "debug": {
+    "show_fps": false
+  }
+}

@@ -38,8 +38,8 @@ def _load():
 
 def _save(data):
     try:
-        with open(_FEATURE_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        from core.atomic_write import atomic_write_json
+        atomic_write_json(_FEATURE_FILE, data, indent=2, ensure_ascii=False)
     except Exception as e:
         _sf_log.warn(f"save failed: {e}")
 

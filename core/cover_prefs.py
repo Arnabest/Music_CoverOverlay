@@ -8,13 +8,22 @@ Storage: .cover_preferences.json (alongside overlay_config.json)
 """
 import json
 import os
+import shutil
 import threading
 from core.logs import get_logger
 
 _cp_log = get_logger("cover_prefs")
 
-_PREFS_FILE = os.path.join(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))), ".cover_preferences.json")
+_APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DATA_DIR = os.path.join(os.environ.get("APPDATA", ""), "QQMusicOverlayNG")
+os.makedirs(_DATA_DIR, exist_ok=True)
+_OLD_PREFS_FILE = os.path.join(_APP_DIR, ".cover_preferences.json")
+_PREFS_FILE = os.path.join(_DATA_DIR, ".cover_preferences.json")
+if os.path.exists(_OLD_PREFS_FILE) and not os.path.exists(_PREFS_FILE):
+    try:
+        shutil.copy2(_OLD_PREFS_FILE, _PREFS_FILE)
+    except Exception as e:
+        _cp_log.warn(f"preference migration failed: {e}")
 _lock = threading.Lock()
 
 
@@ -32,8 +41,8 @@ def _load() -> dict:
 
 def _save(data: dict) -> None:
     try:
-        with open(_PREFS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        from core.atomic_write import atomic_write_json
+        atomic_write_json(_PREFS_FILE, data, indent=2, ensure_ascii=False)
     except Exception as e:
         _cp_log.warn(f"save failed: {e}")
 

@@ -1,8 +1,10 @@
-Pillow>=10.0
-pystray>=0.19
+pyglet>=2.0.0
+Pillow>=10.0.0
+pystray>=0.19.0
 pywin32>=306
-winrt-runtime>=3.0
-winrt-Windows.Media.Control>=3.0
-winrt-Windows.Foundation>=3.0
-winrt-Windows.Storage.Streams>=3.0
-freetype-py>=2.4
+winrt-runtime>=3.0.0
+winrt-Windows.Media.Control>=3.0.0
+winrt-Windows.Foundation>=3.0.0
+winrt-Windows.Storage.Streams>=3.0.0
+freetype-py>=2.4.0
+pyinstaller>=6.0.0

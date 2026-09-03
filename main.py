@@ -1,4 +1,4 @@
-deep"""QQMusic Overlay NG — Desktop lyrics/cover display tool."""
+"""Music CoverOverlay — Desktop music cover & status overlay for QQ Music & NetEase Cloud Music."""
 import sys, os, time, queue, ctypes, threading, json
 
 # High-DPI
@@ -15,7 +15,7 @@ sys.path.insert(0, PROJECT_DIR)
 
 
 def _find_overlay_pids():
-    """Find PIDs of any running QQMusicOverlay NG processes by window title."""
+    """Find PIDs of any running Music CoverOverlay / QQMusicOverlay processes by window title."""
     import ctypes, ctypes.wintypes
     pids = []
     _user32 = ctypes.windll.user32
@@ -23,7 +23,7 @@ def _find_overlay_pids():
     def _enum(hwnd, __):
         buf = (ctypes.c_wchar * 256)()
         if _user32.GetWindowTextW(hwnd, buf, 256):
-            if "QQMusic Overlay NG" in buf.value:
+            if "Music CoverOverlay" in buf.value or "QQMusic Overlay NG" in buf.value:
                 pid = ctypes.wintypes.DWORD()
                 _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
                 if pid.value:
@@ -33,8 +33,8 @@ def _find_overlay_pids():
     return list(set(pids))
 
 def main():
-    # ★ Clean up any stale QQMusicOverlay processes before starting.
-    # Duplicate GL contexts cause GPU contention → periodic 96fps frame drops.
+    # Clean up any stale overlay processes before starting.
+    # Duplicate GL contexts cause GPU contention -> periodic frame drops.
     import ctypes
     _kernel32 = ctypes.windll.kernel32
     _killed = 0
@@ -50,19 +50,19 @@ def main():
     if _killed:
         import time as _t; _t.sleep(0.5)
 
-    # ★ Single-instance mutex: prevents accidental double-launch.
+    # Single-instance mutex: prevents accidental double-launch.
     # If mutex exists, check if the owning process is still alive.
-    _mutex = _kernel32.CreateMutexW(None, False, "QQMusicOverlayNG_SingleInstance")
+    _mutex = _kernel32.CreateMutexW(None, False, "Music_CoverOverlay_SingleInstance")
     if _kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
         # Check if existing process is dead (stale mutex)
         _stale_pids = _find_overlay_pids()
         if not _stale_pids:
             # No overlay process found — stale mutex from crashed process
             _kernel32.CloseHandle(_mutex)
-            _mutex = _kernel32.CreateMutexW(None, False, "QQMusicOverlayNG_SingleInstance")
+            _mutex = _kernel32.CreateMutexW(None, False, "Music_CoverOverlay_SingleInstance")
         else:
             import tkinter.messagebox as _mb
-            _mb.showwarning("QQMusicOverlay NG", "应用已在运行中")
+            _mb.showwarning("Music CoverOverlay", "应用已在运行中")
             return
     _ = _mutex
 
@@ -143,9 +143,14 @@ def main():
     smtc_engine.set_priority(config.get("behavior", {}).get("detection_priority", ["qqmusic", "netease"]))
     smtc_engine.start()
 
+    # ====== Runtime API ======
+    from core.runtime_api import OverlayRuntimeApiServer
+    runtime_api = OverlayRuntimeApiServer()
+    runtime_api.start()
+
     # ====== Overlay Window ======
     from ui.window import OverlayWindow
-    overlay = OverlayWindow(config, reader, status, smtc_engine=smtc_engine)
+    overlay = OverlayWindow(config, reader, status, smtc_engine=smtc_engine, runtime_api=runtime_api)
     overlay.set_tray_queue(cmd_queue)
 
     # Settings — always inline (same Tk event loop). No subprocess, no IPC,
@@ -195,6 +200,10 @@ def main():
             pass
         try:
             smtc_engine.stop()
+        except Exception:
+            pass
+        try:
+            runtime_api.stop()
         except Exception:
             pass
         # Force-kill any remaining overlay processes

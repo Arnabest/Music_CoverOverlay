@@ -1,9 +1,9 @@
-#define MyAppName "QQMusicOverlay NG"
+#define MyAppName "Music CoverOverlay"
 #define MyAppVersion "1.0.0 Beta"
 #define MyAppPublisher "Arna_Shiyuki"
 #define MyAppURL ""
-#define MyAppExeName "QQMusicOverlayNG.exe"
-#define MySourcePath "dist\QQMusicOverlayNG"
+#define MyAppExeName "Music_CoverOverlay.exe"
+#define MySourcePath "dist\Music_CoverOverlay"
 
 [Setup]
 AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
@@ -11,12 +11,12 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 VersionInfoVersion=1.0.0.0
-VersionInfoDescription=QQMusicOverlay NG - 桌面歌词浮层
-DefaultDirName=D:\QQMusicOverlay NG
+VersionInfoDescription=Music CoverOverlay - 适用于QQ Music和NetEase Cloud Music的封面悬浮窗程序
+DefaultDirName=D:\Music CoverOverlay
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=.
-OutputBaseFilename=QQMusicOverlayNG_Setup
+OutputBaseFilename=Music_CoverOverlay_Setup
 SetupIconFile=assets\app_icon.ico
 Compression=lzma2/ultra64
 SolidCompression=yes

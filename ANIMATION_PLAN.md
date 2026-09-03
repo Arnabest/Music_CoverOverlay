@@ -14,13 +14,13 @@
 | 3 | 停在最后画面 | canvas 不清理 | `_frozen_snapshot` 保持最后一帧 PIL Image |
 | 4 | 封面旋转不停 | loading 阶段封面已转 | `compositor._cover_rotation` 独立于 reader 更新 |
 | 5 | 不闪白 | frozen_data 快照 | `_frozen_snapshot` 替代 live data |
-| 6 | SMTC 跳零不理 | 60s 冷却 + 双重验证 | 已在 `progress.py:ProgressTracker` 中实现 ✓ |
+| 6 | SMTC 跳零不理 | 60s 冷却 + 双重验证 | 已在 `progress.py:ProgressTracker` 中实现 [已完成] |
 | 7 | 进度渐透 | `_progress_alpha` 0→1 逐帧 | compositor 增加 `_progress_alpha` 属性 |
-| 8 | 进度比封面先消失 | progress_out 0.25s → cover_out 0.35s | Sequence 已实现顺序 ✓ |
+| 8 | 进度比封面先消失 | progress_out 0.25s → cover_out 0.35s | Sequence 已实现顺序 [已完成] |
 | 9 | 歌放完画面留 | transition_end_out cover_out 保留文字 | frozen_snapshot + 纯 alpha 降窗 |
-| 10 | 停留超时收起 | `_on_stay_timeout` → anim_out | `_on_auto_hide()` → disappear + hide ✓ |
-| 11 | 长歌壁钟 | `_wall_locked` | 已在 `progress.py` 中实现 ✓ |
-| 12 | 常驻不淡出 | stay_forever 跳过计时器 | 已实现 ✓ |
+| 10 | 停留超时收起 | `_on_stay_timeout` → anim_out | `_on_auto_hide()` → disappear + hide [已完成] |
+| 11 | 长歌壁钟 | `_wall_locked` | 已在 `progress.py` 中实现 [已完成] |
+| 12 | 常驻不淡出 | stay_forever 跳过计时器 | 已实现 [已完成] |
 
 ---
 

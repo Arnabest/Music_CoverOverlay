@@ -263,7 +263,7 @@ def render_dashboard(state: MonitorState, recent_errors: list[str]):
     # Footer
     age = time.time() - state.last_update
     if age > 5:
-        lines.append(f"\n  {C.YELLOW}⚠ {age:.0f}s 无 FPS 数据 — 应用是否在运行?{C.RESET}")
+        lines.append(f"\n  {C.YELLOW}[!] {age:.0f}s 无 FPS 数据 — 应用是否在运行?{C.RESET}")
 
     lines.append(f"\n  {C.DIM}Ctrl+C 退出 │ 监控: render/smtc/reader/errors 日志{C.RESET}")
 

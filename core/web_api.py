@@ -15,6 +15,20 @@ from core.logs import get_logger
 
 _api_log = get_logger("web_api")
 
+# ★ Bypass system proxy for QQ Music / NetEase API calls.
+# These are domestic Chinese services that connect directly — routing
+# them through a system proxy (e.g. Clash/V2Ray on 127.0.0.1:7892)
+# causes SSL errors and timeouts when the proxy is down.
+# Use a custom opener with an empty ProxyHandler to force direct connection.
+_proxy_handler = urllib.request.ProxyHandler({})
+_direct_opener = urllib.request.build_opener(_proxy_handler)
+
+
+def _urlopen(req, timeout=5):
+    """Open a URL bypassing the system proxy. Identical signature to
+    urllib.request.urlopen but uses a direct-connection opener."""
+    return _direct_opener.open(req, timeout=timeout)
+
 
 # ========== Web API ==========
 
@@ -38,7 +52,7 @@ def _search_qqmusic(song_name, artist):
                     "Referer": "https://y.qq.com/",
                 }
             )
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with _urlopen(req, timeout=5) as resp:
                 return json.loads(resp.read().decode("utf-8"))
 
         # 收集需要搜索的关键词 (多种 fallback 策略)
@@ -141,7 +155,9 @@ def _search_qqmusic(song_name, artist):
                    f"matched_song={matched_song.get('name','') if matched_song else 'None'} "
                    f"n_songs={len(songs)} n_albums={len(albums)}")
         return songmid, albummid, interval
-    except Exception:
+    except Exception as e:
+        _api_log.warn(f"search_qqmusic: FAILED song={song_name!r} artist={artist!r} "
+                      f"— {type(e).__name__}: {e}")
         return None, None, 0
 
 
@@ -153,7 +169,7 @@ def _get_albummid_from_song(songmid, get_interval=False):
                f"?songmid={songmid}&format=json&tpl=yqq_song_detail")
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", "Referer": "https://y.qq.com/"})
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with _urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         songs = data.get("data", [])
         if songs:
@@ -175,7 +191,7 @@ def _fetch_album_art(albummid, size=300):
     try:
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", "Referer": "https://y.qq.com/"})
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with _urlopen(req, timeout=5) as resp:
             return Image.open(io.BytesIO(resp.read()))
     except Exception:
         return None
@@ -189,7 +205,7 @@ def _fetch_lyrics(songmid):
                f"?songmid={songmid}&format=json")
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", "Referer": "https://y.qq.com/"})
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with _urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         lyric_raw = data.get("lyric", "")
         trans_raw = data.get("trans", "")
@@ -232,7 +248,7 @@ def _search_netease(song_name, artist):
             "User-Agent": _NETEASE_UA,
             "Referer": _NETEASE_REFERER,
         })
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with _urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         songs = data.get("result", {}).get("songs", [])
         if not songs:
@@ -292,7 +308,7 @@ def _fetch_lyrics_netease(song_id):
             "User-Agent": _NETEASE_UA,
             "Referer": _NETEASE_REFERER,
         })
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with _urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         lrc_obj = data.get("lrc", {}) or {}
         tlyric_obj = data.get("tlyric", {}) or {}

@@ -12,16 +12,22 @@ from typing import Any
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 # ★ User data goes to %APPDATA%, not the app install directory.
 # Survives reinstalls, doesn't mix with PyInstaller bundled files.
-DATA_DIR = os.path.join(os.environ.get("APPDATA", ""), "QQMusicOverlayNG")
+DATA_DIR = os.path.join(os.environ.get("APPDATA", ""), "Music_CoverOverlay")
+_legacy_data_dir = os.path.join(os.environ.get("APPDATA", ""), "QQMusicOverlayNG")
 os.makedirs(DATA_DIR, exist_ok=True)
-# ★ Migrate old data from app directory to APPDATA on first run
-for _f in ("overlay_config.json", ".learned_durations.json",
-           ".learned_smtc_features.json", ".wall_snapshots.json",
-           ".cover_preferences.json"):
-    _old = os.path.join(APP_DIR, _f)
-    _new = os.path.join(DATA_DIR, _f)
-    if os.path.exists(_old) and not os.path.exists(_new):
-        shutil.copy2(_old, _new)
+# ★ Migrate old data from app directory or legacy APPDATA to new APPDATA
+for _src_dir in (APP_DIR, _legacy_data_dir):
+    if os.path.exists(_src_dir):
+        for _f in ("overlay_config.json", ".learned_durations.json",
+                   ".learned_smtc_features.json", ".wall_snapshots.json",
+                   ".cover_preferences.json"):
+            _old = os.path.join(_src_dir, _f)
+            _new = os.path.join(DATA_DIR, _f)
+            if os.path.exists(_old) and not os.path.exists(_new):
+                try:
+                    shutil.copy2(_old, _new)
+                except Exception:
+                    pass
 CONFIG_DIR = APP_DIR  # backward compat
 CONFIG_FILE = os.path.join(DATA_DIR, "overlay_config.json")
 THEMES_DIR = os.path.join(APP_DIR, "assets", "themes")
@@ -414,9 +420,9 @@ def detect_available_renderers() -> dict[str, bool]:
 
 
 def save_config(config: dict) -> None:
-    """Save config to disk (pretty-printed JSON)."""
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2, ensure_ascii=False)
+    """Save config to disk atomically (crash-safe)."""
+    from core.atomic_write import atomic_write_json
+    atomic_write_json(CONFIG_FILE, config, indent=2, ensure_ascii=False)
 
 
 def apply_preset(config: dict, preset_name: str) -> dict:

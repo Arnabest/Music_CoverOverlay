@@ -80,6 +80,13 @@ class ProgressTracker:
         self._stuck_since = time.time()
 
     def update(self, reader_duration: float = 0.0, song: str = "", artist: str = ""):
+        # ★ Defense: initialize all auto-reset variables before try block.
+        # If smtc access throws early (e.g. SMTC COM error), the except
+        # handler falls through to auto-reset logic which references
+        # is_no_session/is_paused/s_pos — these must be bound.
+        is_no_session = False
+        is_paused = False
+        s_pos = 0.0
         try:
             smtc = self._smtc
             if smtc is None:
@@ -107,10 +114,18 @@ class ProgressTracker:
             )
 
             # ── Guard release ──────────────────────────────────────
+            # ★ Bug #182: reader_duration > 0 is an independent signal that
+            # the reader has confirmed a song from a recognized player (HWND
+            # found, song identified, duration fetched from QQ Music API).
+            # When SMTC reports empty playback status ("") with s_pos=0.0,
+            # the old condition (reader_duration > 0 and is_playing) would
+            # fail because is_playing=False when status="".  The reader has
+            # already validated the song — no need for SMTC status gate.
             if not self._has_data:
                 if (s_pos > 0.5 or is_paused or is_opened
                         or (is_netease and is_playing)
-                        or (reader_duration > 0 and is_playing)):
+                        or (reader_duration > 0 and is_playing)
+                        or (reader_duration > 0)):  # ★ Bug #182: reader confirms playback independently
                     self._has_data = True
                     if s_pos > 0.5:
                         self._last_smtc = s_pos
@@ -146,13 +161,38 @@ class ProgressTracker:
             # Fix: hold position at 0 until s_pos confirms the new song
             # by dropping near 0.  No record_max_position, no locking.
             if self._fresh_reset:
+                smtc_title = ""
+                smtc_artist = ""
+                try:
+                    smtc_title = smtc.title or ""
+                    smtc_artist = smtc.artist or ""
+                except Exception:
+                    pass
+
+                # Reader/API may confirm the new song slightly later than the
+                # SMTC near-zero window. If SMTC metadata already matches the
+                # current reader song, release the guard even when s_pos > 5.
+                late_song_confirmed = (
+                    reader_duration > 0
+                    and is_playing
+                    and self._same_track(song, artist, smtc_title, smtc_artist)
+                )
                 if 0 < s_pos < 5.0:
                     self._fresh_reset = False  # SMTC confirmed new song
                     self._prev = -1.0  # ★ clear stale _prev to avoid false cycle-wrap
+                    if s_pos > 0.5:
+                        self._last_smtc = s_pos
+                        self._last_change_wall = _wall
                     # Fall through to normal position tracking below
                 elif self._has_data and (is_paused or is_opened or is_no_session):
                     self._fresh_reset = False  # guard released via non-position means
                     self._prev = -1.0
+                elif late_song_confirmed:
+                    self._fresh_reset = False
+                    self._prev = -1.0
+                    if s_pos > 0.5:
+                        self._last_smtc = s_pos
+                        self._last_change_wall = _wall
                 else:
                     # ★ Stale SMTC data from old song or no data yet.
                     # Keep position at 0 — do NOT use potentially stale s_pos.
@@ -301,10 +341,10 @@ class ProgressTracker:
             # ★ Log via BOTH loggers for reliability
             try:
                 from core.logs import get_logger
-                get_logger("progress").warning(
+                get_logger("progress").warn(
                     f"PROG_AUTO_RESET: pos={self.position:.1f}s stuck for "
                     f"{_stuck_sec:.0f}s, {_reason} — resetting")
-                get_logger("window").warning(
+                get_logger("window").warn(
                     f"PROG_AUTO_RESET: pos={self.position:.1f}s stuck for "
                     f"{_stuck_sec:.0f}s, {_reason}")
             except Exception:
@@ -382,3 +422,71 @@ class ProgressTracker:
             return v if v >= min_val else 0.0
         except Exception:
             return 0.0
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        return " ".join((text or "").strip().lower().split())
+
+    @staticmethod
+    def _compact_text(text: str) -> str:
+        return "".join(ch for ch in (text or "").casefold() if ch.isalnum())
+
+    @staticmethod
+    def _strip_annotations(text: str) -> str:
+        pairs = {"(": ")", "[": "]", "（": "）", "【": "】"}
+        closers = set(pairs.values())
+        stack = []
+        out = []
+        for ch in text or "":
+            if ch in pairs:
+                stack.append(pairs[ch])
+                continue
+            if stack and ch == stack[-1]:
+                stack.pop()
+                continue
+            if stack or ch in closers:
+                continue
+            out.append(ch)
+        return "".join(out)
+
+    @classmethod
+    def _artist_parts(cls, text: str) -> list[str]:
+        cleaned = cls._strip_annotations(text)
+        for sep in (" feat. ", " feat ", " featuring ", "/", "&", "、", "，",
+                    ",", ";", "；", "|", "・"):
+            cleaned = cleaned.replace(sep, "\n")
+        parts = [part.strip() for part in cleaned.splitlines()]
+        return [part for part in parts if part]
+
+    @classmethod
+    def _text_matches(cls, left: str, right: str) -> bool:
+        a = cls._normalize_text(left)
+        b = cls._normalize_text(right)
+        if not a or not b:
+            return False
+        if a == b or a in b or b in a:
+            return True
+        ca = cls._compact_text(left)
+        cb = cls._compact_text(right)
+        if not ca or not cb:
+            return False
+        return ca == cb or ca in cb or cb in ca
+
+    @classmethod
+    def _same_track(cls, song: str, artist: str,
+                    smtc_song: str, smtc_artist: str) -> bool:
+        if not cls._text_matches(song, smtc_song):
+            return False
+        if artist and smtc_artist:
+            if cls._text_matches(artist, smtc_artist):
+                return True
+            plain_artist = cls._strip_annotations(artist)
+            plain_smtc_artist = cls._strip_annotations(smtc_artist)
+            if cls._text_matches(plain_artist, plain_smtc_artist):
+                return True
+            for left_part in cls._artist_parts(artist):
+                for right_part in cls._artist_parts(smtc_artist):
+                    if cls._text_matches(left_part, right_part):
+                        return True
+            return False
+        return True

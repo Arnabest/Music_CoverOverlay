@@ -1,5 +1,6 @@
 """Settings window — per-element tabs, working color pickers, X/Y position sliders.
 """
+import ctypes
 import os, sys, time
 # ★ Ensure project root is on sys.path (needed when running settings.py directly)
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -15,11 +16,26 @@ from config import (
     LAYOUT_PRESETS, apply_preset, save_config,
 )
 from core.logs import get_logger
+from ui.settings_theme import TOKENS, apply_ttk_theme
 
 _set_log = get_logger("settings")
 
 _PAD = {"padx": 3, "pady": 1}
 FIELDS = {}
+
+_SETTINGS_BG = TOKENS["bg_base"]
+_SETTINGS_NAV = TOKENS["bg_nav"]
+_SETTINGS_PANEL = TOKENS["bg_panel"]
+_SETTINGS_PANEL_ALT = TOKENS["bg_surface"]
+_SETTINGS_BORDER = TOKENS["border"]
+_SETTINGS_TEXT = TOKENS["text"]
+_SETTINGS_MUTED = TOKENS["muted"]
+_SETTINGS_ACCENT = TOKENS["accent"]
+_SETTINGS_ACCENT_HOVER = TOKENS["accent_hover"]
+_SETTINGS_NAV_TITLES = [
+    "窗口", "封面", "标题", "歌手", "歌词", "进度",
+    "时间", "动画", "来源", "封面库", "主题", "关于",
+]
 
 
 class SettingsWindow:
@@ -51,7 +67,7 @@ class SettingsWindow:
                 self.window.transient(_master)
             except Exception:
                 pass
-        self.window.title("QQMusic Overlay NG — 设置")
+        self.window.title("Music CoverOverlay — 设置")
         try:
             _icon = os.path.join(os.path.dirname(os.path.dirname(
                 os.path.abspath(__file__))), "assets", "app_icon.ico")
@@ -59,9 +75,11 @@ class SettingsWindow:
                 self.window.iconbitmap(_icon)
         except Exception:
             pass
-        self.window.geometry("900x720")
-        self.window.minsize(800, 600)
-        self.window.configure(bg="#1e1e2e")
+        self.window.overrideredirect(True)
+        self.window.geometry("1120x780")
+        self.window.minsize(960, 660)
+        self.window.configure(bg=_SETTINGS_BG)
+        self._apply_soft_window_corners()
 
         self.window.attributes("-topmost", False)
         # ★ Bring to front on open, then behave as normal window
@@ -70,25 +88,195 @@ class SettingsWindow:
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # Style
-        s = ttk.Style()
-        s.theme_use("clam")
-        s.configure("TNotebook", background="#1e1e2e", borderwidth=0)
-        s.configure("TNotebook.Tab", background="#2a2a3e", foreground="white",
-                    padding=[10, 4], borderwidth=0)
-        s.map("TNotebook.Tab", background=[("selected", "#4444aa")])
-        s.configure("TFrame", background="#1e1e2e")
-        s.configure("TLabel", background="#1e1e2e", foreground="white")
-        s.configure("TLabelframe", background="#1e1e2e", foreground="#aaaacc")
-        s.configure("TLabelframe.Label", background="#1e1e2e", foreground="#aaaacc")
-        s.configure("TButton", background="#4444aa", foreground="white", borderwidth=0)
-        s.map("TButton", background=[("active", "#5555cc")])
-        s.configure("TScale", background="#1e1e2e")
+        apply_ttk_theme()
 
-        # Notebook
-        self._nb = ttk.Notebook(self.window)
-        self._nb.pack(fill="both", expand=True, padx=4, pady=4)
+        # Shell: left vertical tabs, right detail pane.
+        self._tab_pages: dict[str, tk.Widget] = {}
+        self._tab_buttons: dict[str, tk.Button] = {}
+        self._tab_order: list[str] = []
+        self._active_tab_key: str | None = None
+        self._nav_build_index = 0
 
-        # Build tabs
+        titlebar = tk.Frame(self.window, bg=_SETTINGS_NAV, height=42, highlightthickness=0)
+        titlebar.pack(side="top", fill="x")
+        titlebar.pack_propagate(False)
+        title_label = tk.Label(titlebar, text="Music CoverOverlay  ·  设置", bg=_SETTINGS_NAV,
+                               fg=_SETTINGS_TEXT, font=("Microsoft YaHei UI", 10, "bold"), anchor="w")
+        title_label.pack(side="left", fill="y", padx=14)
+        close_btn = tk.Button(titlebar, text="×", command=self._on_close,
+                              bg=_SETTINGS_NAV, fg=_SETTINGS_TEXT, activebackground=TOKENS["danger"],
+                              activeforeground="#ffffff", bd=0, width=4, font=("Segoe UI", 15), cursor="hand2")
+        close_btn.pack(side="right", fill="y")
+        for widget in (titlebar, title_label):
+            widget.bind("<ButtonPress-1>", self._start_window_drag)
+            widget.bind("<B1-Motion>", self._drag_window)
+
+        shell = tk.Frame(self.window, bg=_SETTINGS_BG, highlightthickness=0)
+        shell.grid_columnconfigure(2, weight=1)
+        shell.grid_rowconfigure(0, weight=1)
+        self._shell = shell
+
+        self._nav = tk.Frame(shell, bg=_SETTINGS_NAV, width=172, highlightthickness=0)
+        self._nav.grid(row=0, column=0, sticky="ns")
+        self._nav.pack_propagate(False)
+        tk.Label(self._nav, text="MUSIC\nCOVEROVERLAY", bg=_SETTINGS_NAV, fg=_SETTINGS_TEXT,
+                 font=("Microsoft YaHei UI", 11, "bold"), anchor="w", justify="left"
+                 ).pack(fill="x", padx=14, pady=(16, 2))
+        tk.Label(self._nav, text="设置中心", bg=_SETTINGS_NAV, fg=_SETTINGS_MUTED,
+                 font=("Microsoft YaHei UI", 9), anchor="w"
+                 ).pack(fill="x", padx=14, pady=(0, 16))
+        # Navigation can be taller than a small work area.  Keep its own
+        # scroll region so the bottom pages never disappear behind the footer.
+        nav_body = tk.Frame(self._nav, bg=_SETTINGS_NAV, highlightthickness=0)
+        nav_body.pack(fill="both", expand=True, padx=(6, 2), pady=(0, 8))
+        self._nav_canvas = tk.Canvas(nav_body, width=160, bg=_SETTINGS_NAV, highlightthickness=0,
+                                     borderwidth=0, relief="flat")
+        nav_scrollbar = ttk.Scrollbar(nav_body, orient="vertical", command=self._nav_canvas.yview,
+                                      style="Settings.Vertical.TScrollbar")
+        self._nav_buttons_frame = tk.Frame(self._nav_canvas, bg=_SETTINGS_NAV, highlightthickness=0)
+        nav_window = self._nav_canvas.create_window((0, 0), window=self._nav_buttons_frame, anchor="nw")
+        self._nav_buttons_frame.bind(
+            "<Configure>",
+            lambda _event: self._nav_canvas.configure(scrollregion=self._nav_canvas.bbox("all")),
+        )
+        self._nav_canvas.bind(
+            "<Configure>",
+            lambda event: self._nav_canvas.itemconfigure(nav_window, width=event.width),
+        )
+        self._nav_canvas.configure(yscrollcommand=nav_scrollbar.set)
+        self._nav_canvas.pack(side="left", fill="both", expand=True)
+        nav_scrollbar.pack(side="right", fill="y")
+
+        def _scroll_nav(event):
+            self._nav_canvas.yview_scroll(int(-event.delta / 120), "units")
+
+        self._nav_canvas.bind("<Enter>", lambda _event: self._nav_canvas.bind_all("<MouseWheel>", _scroll_nav))
+        self._nav_canvas.bind("<Leave>", lambda _event: self._nav_canvas.unbind_all("<MouseWheel>"))
+
+        tk.Frame(shell, bg=_SETTINGS_BORDER, width=1, highlightthickness=0
+                 ).grid(row=0, column=1, sticky="ns", padx=(2, 10))
+
+        self._content = tk.Frame(shell, bg=_SETTINGS_PANEL, highlightthickness=1,
+                                 highlightbackground=_SETTINGS_BORDER,
+                                 highlightcolor=_SETTINGS_BORDER)
+        self._content.grid(row=0, column=2, sticky="nsew")
+        self._content.grid_rowconfigure(0, weight=1)
+        self._content.grid_columnconfigure(0, weight=1)
+
+        self._build_tabs()
+
+        # Fixed footer: keep action buttons visible on smaller work areas.
+        footer = tk.Frame(self.window, bg=_SETTINGS_BG, highlightthickness=0)
+        footer.pack(side="bottom", fill="x", padx=10, pady=(0, 8))
+        tk.Frame(footer, bg=_SETTINGS_BORDER, height=1, highlightthickness=0
+                 ).pack(fill="x", pady=(0, 6))
+        bf = tk.Frame(footer, bg=_SETTINGS_BG, highlightthickness=0)
+        bf.pack(fill="x")
+        self._footer = footer
+        self._footer_bar = bf
+
+        # Status label
+        self._st = ttk.Label(bf, text="修改自动预览 · 调整后先点「应用」再「确认」",
+                             foreground=_SETTINGS_MUTED, background=_SETTINGS_BG,
+                             font=("Microsoft YaHei", 9))
+        self._st.pack(side="left", padx=6)
+
+        # Buttons — exact same order and behavior as original
+        for text, cmd, style in [("恢复默认", self._reset, "Settings.TButton"),
+                                 ("取消", self._on_close, "Settings.TButton"),
+                                 ("确认", self._confirm, "Accent.Settings.TButton"),
+                                 ("应用", self._apply, "Accent.Settings.TButton")]:
+            ttk.Button(bf, text=text, command=cmd, style=style).pack(side="right", padx=3)
+
+        # Pack the fixed footer before the expandable shell.  Packing the
+        # shell first can allocate the entire client area and clip Apply /
+        # Confirm / Cancel on smaller work areas.
+        shell.pack(side="top", fill="both", expand=True, padx=10, pady=(10, 4))
+        self._fit_to_workarea(default_width=1120, default_height=780)
+
+    def _apply_soft_window_corners(self) -> None:
+        """Prefer native Win11 rounded corners; silently retain the Tk fallback elsewhere."""
+        if os.name != "nt" or self.window is None:
+            return
+        try:
+            corner_preference = ctypes.c_int(2)  # DWMWCP_ROUND
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                int(self.window.winfo_id()), 33, ctypes.byref(corner_preference), ctypes.sizeof(corner_preference)
+            )
+        except Exception:
+            pass
+
+    def _start_window_drag(self, event) -> None:
+        self._drag_origin = (event.x_root, event.y_root, self.window.winfo_x(), self.window.winfo_y())
+
+    def _drag_window(self, event) -> None:
+        origin = getattr(self, "_drag_origin", None)
+        if not origin:
+            return
+        x_root, y_root, window_x, window_y = origin
+        self.window.geometry(f"+{window_x + event.x_root - x_root}+{window_y + event.y_root - y_root}")
+
+    def _get_window_workarea(self) -> tuple[int, int, int, int]:
+        if self.window is None:
+            return (0, 0, 980, 720)
+        screen_w = int(self.window.winfo_screenwidth())
+        screen_h = int(self.window.winfo_screenheight())
+        if os.name != "nt":
+            return (0, 0, screen_w, screen_h)
+        try:
+            class RECT(ctypes.Structure):
+                _fields_ = [
+                    ("left", ctypes.c_long),
+                    ("top", ctypes.c_long),
+                    ("right", ctypes.c_long),
+                    ("bottom", ctypes.c_long),
+                ]
+
+            rect = RECT()
+            spi_get_work_area = 48
+            ok = ctypes.windll.user32.SystemParametersInfoW(
+                spi_get_work_area, 0, ctypes.byref(rect), 0
+            )
+            if ok:
+                return (
+                    int(rect.left),
+                    int(rect.top),
+                    int(rect.right),
+                    int(rect.bottom),
+                )
+        except Exception:
+            pass
+        return (0, 0, screen_w, screen_h)
+
+    def _fit_to_workarea(self, default_width: int = 980,
+                         default_height: int = 720) -> None:
+        if self.window is None:
+            return
+        self.window.update_idletasks()
+        left, top, right, bottom = self._get_window_workarea()
+        work_w = max(int(right - left), 1)
+        work_h = max(int(bottom - top), 1)
+
+        margin_x = 24
+        margin_y = 32
+        usable_w = max(work_w - margin_x * 2, 1)
+        usable_h = max(work_h - margin_y * 2, 1)
+        width = max(1, min(default_width, usable_w))
+        height = max(1, min(default_height, usable_h))
+
+        self.window.minsize(min(860, width), min(600, height))
+
+        x = left + max((work_w - width) // 2, 0)
+        y = top + max((work_h - height) // 2, 0)
+        self.window.geometry(f"{width}x{height}+{x}+{y}")
+        _set_log.info(
+            "settings window fitted to workarea: "
+            f"workarea={work_w}x{work_h} window={width}x{height} pos=({x},{y})"
+        )
+
+    def _build_tabs(self) -> None:
+        """Build all settings pages in the left-nav shell."""
+        self._nav_build_index = 0
         self._tab_window()
         self._tab_cover()
         self._tab_title()
@@ -101,23 +289,44 @@ class SettingsWindow:
         self._tab_cover_library()
         self._tab_themes()
         self._tab_about()
+        if self._active_tab_key not in self._tab_pages:
+            self._active_tab_key = self._tab_order[0] if self._tab_order else None
+        if self._active_tab_key:
+            self._select_tab(self._active_tab_key)
 
-        # Bottom bar
-        bf = ttk.Frame(self.window)
-        bf.pack(fill="x", padx=10, pady=6)
+    def _select_tab(self, key: str) -> None:
+        """Switch the visible page and update left navigation state."""
+        if key not in self._tab_pages:
+            return
+        self._active_tab_key = key
+        for tab_key, page in self._tab_pages.items():
+            if tab_key == key:
+                page.grid()
+            else:
+                page.grid_remove()
+        self._refresh_nav_buttons()
 
-        # Status label
-        self._st = ttk.Label(bf, text="修改自动预览 · 调整后先点「应用」再「确认」",
-                             foreground="#888", background="#1e1e2e",
-                             font=("Microsoft YaHei", 9))
-        self._st.pack(side="left", padx=6)
+    def _refresh_nav_buttons(self) -> None:
+        for key, btn in self._tab_buttons.items():
+            selected = key == self._active_tab_key
+            btn.configure(
+                bg=TOKENS["accent_soft"] if selected else _SETTINGS_NAV,
+                fg="#ffffff" if selected else _SETTINGS_MUTED,
+                activebackground=_SETTINGS_ACCENT_HOVER if selected else TOKENS["bg_hover"],
+                activeforeground="#ffffff",
+                relief="flat",
+            )
 
-        # Buttons — exact same order and behavior as original
-        for text, cmd in [("恢复默认", self._reset),
-                          ("取消",     self._on_close),
-                          ("确认",     self._confirm),
-                          ("应用",     self._apply)]:
-            ttk.Button(bf, text=text, command=cmd).pack(side="right", padx=3)
+    def _clear_tab_shell(self) -> None:
+        """Remove all generated pages and nav buttons before a rebuild."""
+        for child in self._content.winfo_children():
+            child.destroy()
+        for child in self._nav_buttons_frame.winfo_children():
+            child.destroy()
+        self._tab_pages.clear()
+        self._tab_buttons.clear()
+        self._tab_order.clear()
+        self._nav_build_index = 0
 
     # ================================================================
     # Tab: Window
@@ -143,7 +352,7 @@ class SettingsWindow:
                      size_cfg.get("height", 550), 200, 1500, 10, fmt=".0f", heavy=True); row += 1
         self._check(sf, row, "窗口置顶", self._kp("window.always_on_top"),
                     w.get("always_on_top", True)); row += 1
-        self._check(sf, row, "鼠标穿透 ⚠ 开启后无法点击窗口，仅可通过托盘菜单操作",
+        self._check(sf, row, "鼠标穿透 [提示] 开启后无法点击窗口，仅可通过托盘菜单操作",
                     self._kp("window.click_through"),
                     w.get("click_through", False)); row += 1
         # (OBS capture: use Display Capture + crop, or Spout when VS2022 available)
@@ -357,7 +566,7 @@ class SettingsWindow:
                     ["left", "center", "right"]); row += 1
         self._combo(sf, row, "显示行数", self._nk("lyrics", "max_lines"),
                     int(float(node.get("max_lines", 1))), [1, 2]); row += 1
-        self._check(sf, row, "双语显示 ⚠ 翻译来自NetEase API，部分歌曲可能无翻译",
+        self._check(sf, row, "双语显示 [提示] 翻译来自NetEase API，部分歌曲可能无翻译",
                     self._nk("lyrics", "bilingual"),
                     node.get("bilingual", True)); row += 1
 
@@ -405,7 +614,7 @@ class SettingsWindow:
         """Show a banner explaining that time/progress features are unavailable."""
         banner = tk.Frame(sf.inner, bg="#554400", relief="solid", bd=1)
         banner.pack(fill="x", padx=8, pady=12)
-        tk.Label(banner, text="⚠ 当前播放源不提供播放进度",
+        tk.Label(banner, text="当前播放源不提供播放进度",
                  fg="#ffcc44", bg="#554400",
                  font=("Microsoft YaHei", 11, "bold")).pack(pady=(8, 2))
         tk.Label(banner, text="时间进度和时长显示已自动关闭",
@@ -690,12 +899,12 @@ class SettingsWindow:
                      anim.get("fade_out_ms", 800), 100, 3000, 50); row += 1
         self._slider(sf, row, "显示停留(s)", self._kp("animation.stay_seconds"),
                      anim.get("stay_seconds", 8), 2, 120, 1); row += 1
-        self._check(sf, row, "常驻显示(不自动隐藏) ⚠ 关闭后窗口将在几秒后自动隐藏",
+        self._check(sf, row, "常驻显示(不自动隐藏) [注意] 关闭后窗口将在几秒后自动隐藏",
                     self._kp("animation.stay_forever"),
                     anim.get("stay_forever", False)); row += 1
         self._combo(sf, row, "渲染帧率", self._kp("animation.fps"),
                     int(anim.get("fps", 60)), [15, 30, 60, 120]); row += 1
-        hint = ttk.Label(sf.inner, text="⚠ 更改后需重启应用生效", foreground="#cc8844",
+        hint = ttk.Label(sf.inner, text="[注意] 更改后需重启应用生效", foreground="#cc8844",
                          background="#1e1e2e", font=("Microsoft YaHei", 9))
         hint.grid(row=row, column=1, columnspan=2, sticky="w", padx=4, pady=(0, 4)); row += 1
 
@@ -728,8 +937,8 @@ class SettingsWindow:
 
         # Fullscreen power saving
         _fs_labels = {"pause": "暂停旋转动画（全屏覆盖时停止封面旋转）",
-                      "30fps": "降至30fps（全屏覆盖时封面旋转上限30fps）",
-                      "15fps": "降至15fps（全屏覆盖时封面旋转上限15fps）"}
+                       "30fps": "降至30fps（全屏覆盖时封面旋转上限30fps）",
+                       "15fps": "降至15fps（全屏覆盖时封面旋转上限15fps）"}
         _fs_mode = anim.get("fullscreen_eco_mode", "pause")
         self._combo(sf, row, "全屏覆盖时旋转动画", self._kp("animation.fullscreen_eco_mode"),
                     _fs_mode, ["pause", "30fps", "15fps"], labels=_fs_labels, width=35); row += 1
@@ -741,7 +950,7 @@ class SettingsWindow:
 
         avail = self._available_renderers()
         renderer_val = anim.get("renderer", "pil")
-        self._combo(sf, row, "渲染后端 ⚡", self._kp("animation.renderer"),
+        self._combo(sf, row, "渲染后端", self._kp("animation.renderer"),
                     renderer_val, avail); row += 1
         gpu_note = "OpenGL=GPU加速" if "opengl" in avail else "OpenGL 不可用(需 pip install pyglet)"
         ttk.Label(sf.inner, text=f"※ pil=CPU软渲染 | {gpu_note} | 切换需重启",
@@ -765,13 +974,13 @@ class SettingsWindow:
         "qqmusic": {
             "name": "QQ音乐", "lyrics": True, "progress": True, "cover": True,
             "notes": [
-                "⚠ QQ音乐 API 不支持 7 分钟以上长音乐的播放进度精确定时",
+                "[注意] QQ音乐 API 不支持 7 分钟以上长音乐的播放进度精确定时",
             ],
         },
         "netease": {
             "name": "网易云音乐", "lyrics": True, "progress": False, "cover": True,
             "notes": [
-                "⚠ 网易云音乐 SMTC 不提供播放进度数据，无法显示进度条和时间",
+                "[注意] 网易云音乐 SMTC 不提供播放进度数据，无法显示进度条和时间",
             ],
         },
     }
@@ -870,7 +1079,7 @@ class SettingsWindow:
             return
 
         def _row(cap: str, ok: bool) -> None:
-            icon = "✅" if ok else "❌"
+            icon = "[支持]" if ok else "[不支持]"
             fg = "#44cc88" if ok else "#cc4444"
             fr = tk.Frame(self._player_info_frame, bg="#2a2a3e")
             fr.pack(fill="x", padx=8, pady=2)
@@ -985,14 +1194,14 @@ class SettingsWindow:
         # Refresh + Export buttons + restore
         btn_frame = ttk.Frame(sf.inner)
         btn_frame.pack(fill="x", padx=8, pady=(4, 8))
-        ttk.Button(btn_frame, text="🔄 刷新封面",
+        ttk.Button(btn_frame, text="刷新封面",
                    command=self._force_refresh_covers).pack(side="left", padx=4)
         ttk.Button(btn_frame, text="导出当前封面",
                    command=self._export_current_cover).pack(side="left", padx=4)
         ttk.Button(btn_frame, text="导出全部封面",
                    command=self._export_all_covers).pack(side="left", padx=4)
         # Restore button (hidden until auto-disable is applied)
-        self._restore_label = tk.Label(btn_frame, text="⚠ 已自动关闭部分显示",
+        self._restore_label = tk.Label(btn_frame, text="[提示] 已自动关闭部分显示",
                                        fg="#cc8844", bg="#1e1e2e",
                                        font=("Microsoft YaHei", 9))
         self._restore_btn = tk.Button(btn_frame, text="恢复显示选项",
@@ -1047,8 +1256,8 @@ class SettingsWindow:
         if cfg_idx == 0:
             # Auto mode: use reader's auto_cover_index (matches priority order:
             # SMTC高清 > SMTC缩略图 > QQ音乐API > 本地)
-            _auto_idx = getattr(self.reader, 'auto_cover_index', 0)
-            current_idx = _auto_idx if 0 <= _auto_idx < len(candidates) else 0
+            _auto_idx = getattr(self.reader, 'auto_cover_index', -1)
+            current_idx = _auto_idx if 0 <= _auto_idx < len(candidates) else -1
         elif cfg_name:
             # ★ Match by source NAME to handle index drift between reader's
             # _cover_candidates list and our local filtered candidates list.
@@ -1122,7 +1331,7 @@ class SettingsWindow:
             name_lbl.bind("<Button-1>", lambda e, i=idx: self._on_cover_select(i))
 
             if is_current:
-                tk.Label(card, text="✓ 当前", bg="#4444aa", fg="#44cc88",
+                tk.Label(card, text="[当前]", bg="#4444aa", fg="#44cc88",
                         font=("Microsoft YaHei", 8, "bold")).pack()
 
     def _on_cover_select(self, idx):
@@ -1259,8 +1468,16 @@ class SettingsWindow:
         cfg_idx = self._w.get("behavior", {}).get("cover_source_index", 0)
         cfg_name = self._w.get("behavior", {}).get("cover_source_name", "")
         if cfg_idx == 0:
-            _auto_idx = getattr(self.reader, 'auto_cover_index', 0)
-            current_idx = _auto_idx if 0 <= _auto_idx < len(candidates) else 0
+            _auto_idx = getattr(self.reader, 'auto_cover_index', -1)
+            if 0 <= _auto_idx < len(candidates):
+                current_idx = _auto_idx
+            else:
+                tk.messagebox.showinfo(
+                    "无可靠封面",
+                    "当前自动模式下暂无可靠封面，正在等待 SMTC 或在线封面。",
+                    parent=self.window,
+                )
+                return
         elif cfg_name:
             current_idx = 0
             for i, (name, _img) in enumerate(candidates):
@@ -1374,17 +1591,8 @@ class SettingsWindow:
             _set_log.warn(f"SMTC player check: {e}")
         if _cur_player != _prev_player:
             self._last_poll_player = _cur_player
-            # Rebuild progress/time tabs to reflect new player capabilities
-            _nb = self._nb
-            _to_remove = []
-            for _tid in _nb.tabs():
-                _t = _nb.tab(_tid, "text")
-                if "进度" in str(_t) or "时间" in str(_t):
-                    _to_remove.append(_tid)
-            for _tid in _to_remove:
-                _nb.forget(_tid)
-            self._tab_progress()
-            self._tab_progress_time()
+            # Rebuild pages to reflect source-specific progress/time capabilities.
+            self._rebuild()
             # Also force cover card refresh (new player = new SMTC thumbnail)
             self._rebuild_cover_cards()
         # ★ Always rebuild when stale status changes (new search completed)
@@ -1445,9 +1653,9 @@ class SettingsWindow:
         # Toolbar
         bar = ttk.Frame(sf.inner)
         bar.pack(fill="x", padx=8, pady=4)
-        ttk.Button(bar, text="🔄 刷新列表",
+        ttk.Button(bar, text="刷新列表",
                    command=self._rebuild_cover_library).pack(side="left", padx=4)
-        ttk.Button(bar, text="🗑 清空缓存",
+        ttk.Button(bar, text="清空缓存",
                    command=self._clear_cover_cache).pack(side="left", padx=4)
 
         # Grid container
@@ -1625,9 +1833,12 @@ class SettingsWindow:
 
         # Version
         from version import get_version, get_short_version, get_build_stamp
-        ttk.Label(sf.inner, text="QQMusicOverlay NG", foreground="#ffffff",
+        ttk.Label(sf.inner, text="Music CoverOverlay", foreground="#ffffff",
                   background="#1e1e2e", font=("Microsoft YaHei", 16, "bold")
                   ).grid(row=row, column=0, columnspan=2, sticky="w", padx=12, pady=(12, 2)); row += 1
+        ttk.Label(sf.inner, text="适用于 QQ Music 和 NetEase Cloud Music 的封面悬浮窗程序",
+                  foreground="#aaaacc", background="#1e1e2e", font=("Microsoft YaHei", 9)
+                  ).grid(row=row, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 4)); row += 1
         ttk.Label(sf.inner, text=get_version(), foreground="#8888cc",
                   background="#1e1e2e", font=("Microsoft YaHei", 10)
                   ).grid(row=row, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 2)); row += 1
@@ -1700,23 +1911,65 @@ class SettingsWindow:
     # ================================================================
 
     def _scroll_frame(self, title: str):
-        """Create a scrollable frame and add it as a notebook tab."""
-        outer = ttk.Frame(self._nb)
-        self._nb.add(outer, text=title)
-        canvas = tk.Canvas(outer, bg="#1e1e2e", highlightthickness=0)
-        scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        """Create a scrollable settings page in the right detail pane."""
+        idx = self._nav_build_index
+        self._nav_build_index += 1
+        nav_title = _SETTINGS_NAV_TITLES[idx] if idx < len(_SETTINGS_NAV_TITLES) else title.strip()
+        key = f"tab_{idx}_{nav_title}"
+
+        outer = tk.Frame(self._content, bg=_SETTINGS_PANEL, highlightthickness=0)
+        outer.grid(row=0, column=0, sticky="nsew")
+        outer.grid_rowconfigure(2, weight=1)
+        outer.grid_columnconfigure(0, weight=1)
+        outer.grid_remove()
+
+        header = tk.Frame(outer, bg=_SETTINGS_PANEL, highlightthickness=0)
+        header.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 8))
+        tk.Label(header, text=nav_title, bg=_SETTINGS_PANEL, fg=_SETTINGS_TEXT,
+                 font=("Microsoft YaHei", 16, "bold"), anchor="w"
+                 ).pack(side="left")
+        tk.Frame(outer, bg=_SETTINGS_BORDER, height=1, highlightthickness=0
+                 ).grid(row=1, column=0, sticky="ew", padx=18)
+
+        body = tk.Frame(outer, bg=_SETTINGS_PANEL, highlightthickness=0)
+        body.grid(row=2, column=0, sticky="nsew", padx=18, pady=(10, 14))
+        body.grid_rowconfigure(0, weight=1)
+        body.grid_columnconfigure(0, weight=1)
+
+        canvas = tk.Canvas(body, bg=_SETTINGS_PANEL, highlightthickness=0,
+                           borderwidth=0, relief="flat")
+        scrollbar = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
         inner = ttk.Frame(canvas)
+        inner.columnconfigure(1, weight=1)
         inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(inner_id, width=e.width))
         canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns", padx=(6, 0))
+
+        btn = tk.Button(
+            self._nav_buttons_frame,
+            text=nav_title,
+            command=lambda k=key: self._select_tab(k),
+            anchor="w",
+            padx=12,
+            pady=8,
+            bd=0,
+            font=("Microsoft YaHei UI", 10),
+            cursor="hand2",
+        )
+        btn.pack(fill="x", padx=6, pady=1)
+        self._tab_pages[key] = outer
+        self._tab_buttons[key] = btn
+        self._tab_order.append(key)
         # Mouse wheel scrolling
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
         canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
         canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
         result = type('ScrollFrame', (), {'inner': inner, 'canvas': canvas})()
+        self._refresh_nav_buttons()
         return result
 
     # -- Backend helpers --
@@ -2216,7 +2469,7 @@ class SettingsWindow:
         name = info["name"]
         lines = [f"「{name}」不支持："]
         for m in missing:
-            lines.append(f"  ❌ {m}")
+            lines.append(f"  - {m}")
         lines.append("\n是否自动关闭相关显示选项？")
         return "\n".join(lines)
 
@@ -2337,7 +2590,7 @@ class SettingsWindow:
                 self._priority_popup_shown = True
                 import tkinter.messagebox as tkmb
                 want = tkmb.askyesno("功能缺失提醒",
-                                    warning + "\n\n💡 设置 → 来源 → 不再提示 可永久关闭",
+                                    warning + "\n\n提示：设置 → 来源 → 不再提示 可永久关闭",
                                     parent=self.window)
                 if want:
                     self._apply_missing_disable()
@@ -2408,12 +2661,7 @@ class SettingsWindow:
             parent=self.window, initialvalue=old_name)
         if new_name and new_name.strip() and new_name.strip() != old_name:
             if rename_theme(old_name, new_name.strip()):
-                # Refresh only the theme list tab — find and forget old, then recreate
-                for tab_id in self._nb.tabs():
-                    if self._nb.tab(tab_id, "text") == " 主题 ":
-                        self._nb.forget(tab_id)
-                        break
-                self._tab_themes()
+                self._rebuild()
             else:
                 messagebox.showwarning("重命名失败",
                                        f"无法重命名 '{old_name}' → '{new_name.strip()}'（名称已存在或文件不存在）",
@@ -2425,24 +2673,28 @@ class SettingsWindow:
             self._rebuild()
 
     def _rebuild(self) -> None:
-        """Rebuild all tabs."""
-        for tab_id in self._nb.tabs():
-            self._nb.forget(tab_id)
+        """Rebuild all settings pages."""
+        self._clear_tab_shell()
         self._vars.clear()
-        self._tab_window()
-        self._tab_cover()
-        self._tab_title()
-        self._tab_artist()
-        self._tab_lyrics()
-        self._tab_progress()
-        self._tab_progress_time()
-        self._tab_animation()
-        self._tab_sources()
-        self._tab_cover_library()
-        self._tab_themes()
-        self._tab_about()
+        self._build_tabs()
 
     def _on_close(self) -> None:
+        if getattr(self, "_closing", False):
+            return
+        self._closing = True
+        # Hide synchronously so the close feels immediate; freeing the large
+        # settings widget tree happens once Tk returns to its idle loop.
+        closing_window = self.window
+        try:
+            closing_window.withdraw()
+        except Exception:
+            pass
+        closing_window.after_idle(lambda: self._finish_close(closing_window))
+
+    def _finish_close(self, closing_window) -> None:
         if self.on_close:
             self.on_close()
-        self.window.destroy()
+        try:
+            closing_window.destroy()
+        except Exception:
+            pass

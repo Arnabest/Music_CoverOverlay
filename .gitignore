@@ -2,41 +2,51 @@
 build/
 dist/
 *.exe
-*.spec
+!Music_CoverOverlay.spec
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 
-# IDE
+# Environments
+.venv/
+venv/
+env/
+
+# IDE & Assistant configs
 .vscode/
 .idea/
+.claude/
+.agents/
 
-# Runtime data (user-specific, in APPDATA)
+# Runtime data (user-specific / cached)
 .cover_preferences.json
 .learned_durations.json
 .learned_smtc_features.json
 .wall_snapshots.json
 overlay_config.json
 
-# Logs
+# Logs & cache
+logs/
+.cache/
 *.log
 
-# Temp files
-新建 文本文档*.txt
-
-# Deep Code (project-level config, keep skills if any)
-.deepcode/settings.json
-
-# Version backups (manual snapshots)
+# Backups & archives
+*.bak
+*.bak.*
+*.zip
 versions/
 history/
+release_assets/
 
-# Test images
+# Deep Code & MCP configs
+.deepcode/settings.json
+.mcp.json
+.mcp*.json
+
+# Test fixtures & scratch images
+tests/fixtures/sample_images/
 test_*.png
-3.jpg
-4.png
-5.png
-6.png
-cover_crop.png
+*.tmp

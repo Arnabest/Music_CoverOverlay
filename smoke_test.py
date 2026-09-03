@@ -1,5 +1,5 @@
 """
-Smoke test for QQMusicOverlay NG.
+Smoke test for Music CoverOverlay.
 Launches the overlay, waits for initialization, checks for errors, reports.
 
 Usage:
@@ -85,18 +85,23 @@ def main():
                 try:
                     with open(heartbeat_file, "r") as f:
                         content = f.read().strip()
-                    if "alive" in content.lower():
+                    # Heartbeat file contains a float timestamp (time.time()).
+                    # Parse it — a valid float means the watchdog is writing.
+                    try:
+                        float(content)
                         elapsed = time.time() - (deadline - args.timeout)
-                        print(f"[3/4] Heartbeat detected after {elapsed:.1f}s ✓")
+                        print(f"[3/4] Heartbeat detected after {elapsed:.1f}s [OK]")
                         initialized = True
                         break
+                    except ValueError:
+                        pass
                 except Exception:
                     pass
 
             time.sleep(0.5)
 
         if not initialized:
-            print(f"WARNING: No heartbeat within {args.timeout}s — checking logs anyway")
+            print(f"WARNING: No heartbeat within {args.timeout}s - checking logs anyway")
 
         # Check for errors
         print("[4/4] Checking logs for errors...")
@@ -112,7 +117,7 @@ def main():
                 print(f"  ... and {len(errors) - 10} more")
             exit_code = 2
         else:
-            print("\nPASSED: No errors in logs ✓")
+            print("\nPASSED: No errors in logs [OK]")
             exit_code = 0
 
     finally:
