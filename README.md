@@ -229,27 +229,6 @@ pip install -r requirements.txt
 
 ---
 
-## 项目构建与打包 (Packaging & Release)
-
-项目自带完整的自动化打包流水线，基于 PyInstaller 与 Inno Setup 6。
-
-```powershell
-# 1. 快速构建（仅生成 dist\Music_CoverOverlay 便携绿色版目录）
-python build.py --quick
-
-# 2. 完整构建（更新构建版本戳 + PyInstaller 打包 + 制作 Inno Setup 安装包）
-python build.py
-
-# 3. 仅自增更新版本时间戳
-python build.py --stamp-only
-```
-
-构建成功后将生成：
-- **便携程序目录**：`dist\Music_CoverOverlay\Music_CoverOverlay.exe`
-- **一键安装包**：`Music_CoverOverlay_Setup.exe`（以及带版本号的归档包 `Music_CoverOverlay_Setup_vX.XX_XXXX.exe`）
-
----
-
 ## 目录结构 (Project Structure)
 
 ```
@@ -258,10 +237,8 @@ Music_CoverOverlay/
 ├── run.bat                     # 便捷启动批处理脚本（已处理 Python 3.14 mimalloc 适配）
 ├── config.py                   # 声明式配置 Schema 与主题管理逻辑
 ├── version.py                  # 版本定义、构建时间戳与自动 Stamp 引擎
-├── build.py                    # 自动化构建脚本 (PyInstaller + Inno Setup)
-├── Music_CoverOverlay.spec     # PyInstaller 打包规格与依赖绑定配置
-├── setup.iss                   # Inno Setup 6 安装包编译描述脚本
-├── requirements.txt            # Python 运行与构建依赖声明
+├── overlay_config.default.json # 出厂预设配置文件模板
+├── requirements.txt            # Python 运行所需依赖声明
 ├── core/                       # 数据与底层捕获层
 │   ├── reader.py               # 音乐数据整合调度引擎
 │   ├── smtc_engine.py          # Windows SMTC 系统媒体控制异步引擎

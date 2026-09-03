@@ -1,8 +1,10 @@
-# Build artifacts
+# Build artifacts & local packaging scripts
 build/
 dist/
 *.exe
-!Music_CoverOverlay.spec
+build.py
+setup.iss
+*.spec
 
 # Python
 __pycache__/
