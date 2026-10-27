@@ -218,6 +218,21 @@ class RenderEngine:
         if w < 20 or h < 20:
             self._schedule_frame(); return
 
+        # ★ Hidden ~2fps (parity with the GL path's idle rule): when the Tk
+        # window is withdrawn, skip the expensive compositor + PhotoImage
+        # phases most frames.  Phase 1/2 above still run every tick, so song
+        # detection, progress tracking and transition bookkeeping continue;
+        # once the window is shown again the very next frame renders fully.
+        try:
+            _hidden = self.root.state() == "withdrawn"
+        except Exception:
+            _hidden = False
+        if _hidden:
+            _skip = max(1, round(self.target_fps / 2))
+            self._hidden_frame_tick = getattr(self, '_hidden_frame_tick', 0) + 1
+            if self._hidden_frame_tick % _skip != 0:
+                self._schedule_frame(); return
+
         try:
             # Phase 3: compositor render
             pil_image = self.compositor.render_to_pil(self.scene, data, w, h)
@@ -356,7 +371,7 @@ class RenderEngine:
         for eid, lb in _LABELS.items():
             visible = self._get_node_visible(eid)
             menu.add_command(
-                label=f"  {'[x]' if visible else '[ ]'} {lb}",
+                label=f"  {'✓' if visible else '☐'} {lb}",
                 command=lambda eid=eid: self._menu_toggle_element(eid))
 
         menu.add_separator()

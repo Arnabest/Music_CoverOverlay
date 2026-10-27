@@ -29,6 +29,15 @@ _RE_TAG = re.compile(r'\[(\w+):(.*?)\]')                   # [ti:...], [ar:...],
 _RE_TIMESTAMP = re.compile(r'\[(\d{1,3}):(\d{2})(?:\.(\d{2,3}))?\]')  # [mm:ss.xx] or [mm:ss.xxx]
 _RE_WORD_TIME = re.compile(r'<(\d{2}):(\d{2})\.(\d{2,3})>')  # <mm:ss.xx> word-level (enhanced LRC)
 
+# ★ Invisible/zero-width characters that lyric sources (especially NetEase)
+# sprinkle into lines.  Fonts have no glyph for them — PIL renders them as
+# tofu boxes mid-line, which users report as 多国语言乱码.  Strip them at
+# parse time so every consumer (renderer, merger, hash) sees clean text.
+_INVISIBLE_RE = re.compile(
+    '[\u200b\u200c\u200d\u2060\ufeff\u00ad\u180e'
+    '\u200e\u200f\u202a\u202b\u202c\u202d\u202e'
+    '\u2066\u2067\u2068\u2069]')
+
 # Copyright / boilerplate notices injected by QQ Music that should be filtered
 # from display. These are not song lyrics — they're legal disclaimers.
 _COPYRIGHT_PATTERNS = [
@@ -87,6 +96,8 @@ class LRCParser:
                 text = base64.b64decode(lrc_text).decode('utf-8', errors='replace')
             except Exception:
                 text = lrc_text
+        # ★ Strip zero-width/invisible characters (tofu-box source)
+        text = _INVISIBLE_RE.sub('', text) if text else text
 
         metadata: dict = {}
         timed_lines: list[tuple[int, str]] = []

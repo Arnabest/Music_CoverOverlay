@@ -18,6 +18,7 @@ from pyglet.gl import (
 )
 import ctypes
 import os
+from collections import OrderedDict
 import struct
 
 from core.logs import get_logger
@@ -290,13 +291,110 @@ class TextRenderer:
 
     def __init__(self):
         self._font_cache: dict[tuple, ImageFont.FreeTypeFont] = {}
-        self._texture_cache: dict[str, int] = {}  # key → GL texture ID
+        # ★ LRU-bounded texture cache.  Every lyric line / title / time string
+        # accumulates here; previously unbounded, so long sessions leaked
+        # thousands of textures.  Access recency ordering + popitem(last=False)
+        # eviction — recently drawn entries can never be evicted mid-frame.
+        self._texture_cache: OrderedDict[str, int] = OrderedDict()  # key → GL texture ID
         self._texture_sizes: dict[str, tuple[int, int]] = {}
+        self._texture_cache_max: int = 256
         self._font_map: dict[str, str] = _build_font_map()
+        # ★ Script-aware font fallback state (see resolve_family_for_text).
+        # Probed on real machines: Microsoft YaHei has NO glyphs for Hangul,
+        # Thai, Arabic, Hebrew or Devanagari — lyrics in those scripts
+        # rendered as tofu boxes.  These caches make per-text resolution cheap.
+        self._cov_font_cache: dict[str, ImageFont.FreeTypeFont] = {}
+        self._glyph_cov: dict[tuple[str, int], bool] = {}
+        self._family_choice_cache: dict[tuple[str, str], str] = {}
 
     def _resolve_font_path(self, family: str) -> str | None:
         """Resolve a font family name to a file path using the font map."""
         return self._font_map.get(family.lower())
+
+    # ── Script-aware font fallback ────────────────────────────────────────
+
+    _PROBE_SIZE = 32
+    # Private-use codepoints that no normal font maps — their masks ARE the
+    # .notdef tofu box; comparing against them detects missing glyphs.
+    _NOTDEF_REFS = ("\ue000", "\uf8ff")
+    _FALLBACK_FAMILIES = (
+        "Microsoft YaHei", "Malgun Gothic", "Microsoft JhengHei",
+        "Yu Gothic UI", "MS Gothic", "Leelawadee UI", "Nirmala UI",
+        "Segoe UI", "Tahoma", "Arial",
+    )
+
+    def _probe_font(self, family: str):
+        """Font for glyph-coverage probing (fixed size, cached per family)."""
+        f = self._cov_font_cache.get(family)
+        if f is None:
+            path = self._resolve_font_path(family)
+            if not path:
+                return None
+            try:
+                f = ImageFont.truetype(path, self._PROBE_SIZE)
+            except Exception:
+                return None
+            self._cov_font_cache[family] = f
+        return f
+
+    def _covers(self, family: str, ch: str) -> bool:
+        """True when the family has a real glyph for ch (not .notdef tofu)."""
+        key = (family, ord(ch))
+        hit = self._glyph_cov.get(key)
+        if hit is not None:
+            return hit
+        covered = True
+        font = self._probe_font(family)
+        if font is None:
+            covered = False
+        else:
+            try:
+                m = font.getmask(ch)
+                for r in self._NOTDEF_REFS:
+                    rm = font.getmask(r)
+                    if m.size == rm.size and bytes(m) == bytes(rm):
+                        covered = False
+                        break
+            except Exception:
+                covered = False
+        self._glyph_cov[key] = covered
+        return covered
+
+    def resolve_family_for_text(self, text: str, family: str) -> str:
+        """Pick the family whose glyphs best cover this text.
+
+        Checks the unique non-ASCII characters of the text against the
+        configured family; if any glyph is missing, walks the fallback chain
+        and returns the family with the fewest uncovered characters (the
+        configured family wins ties).  Results are cached per (text, family)
+        — resolution cost is paid once per distinct lyric line.
+        """
+        if not text:
+            return family
+        cache_key = (text, family)
+        hit = self._family_choice_cache.get(cache_key)
+        if hit is not None:
+            return hit
+        if len(self._family_choice_cache) > 512:
+            self._family_choice_cache.clear()
+
+        best = family
+        chars = {c for c in text if not c.isspace() and ord(c) >= 0x80}
+        if chars and not all(self._covers(family, c) for c in chars):
+            best_miss: int | None = None
+            for cand in self._FALLBACK_FAMILIES:
+                miss = sum(0 if self._covers(cand, c) else 1 for c in chars)
+                if best_miss is None or miss < best_miss:
+                    best, best_miss = cand, miss
+                if miss == 0:
+                    break
+            if best != family:
+                _txt_log.rate_limited(
+                    "font_fallback", 30.0, "INFO",
+                    f"font fallback: {family!r} missing {best_miss} glyph(s) "
+                    f"→ {best!r} for {text[:24]!r}")
+        self._family_choice_cache[cache_key] = best
+        return best
 
     def get_font(self, family: str, size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
         """Get a PIL font (cached).  When bold=True, loads the bold variant.
@@ -324,22 +422,40 @@ class TextRenderer:
         font = None
 
         if bold:
-            # Try bold face within .ttc collections first
-            ttc_candidates = [
-                ("msyh.ttc", 1),       # Microsoft YaHei Bold
-                ("simhei.ttf", 0),     # SimHei (黑体, inherently bold)
-                ("msjh.ttc", 1),       # Microsoft JhengHei Bold
-                ("segoeui.ttc", 1),    # Segoe UI Bold
-                ("seguibl.ttf", 0),    # Segoe UI Bold (separate)
-                ("seguisb.ttf", 0),    # Segoe UI Semibold
-                ("arialbd.ttf", 0),    # Arial Bold
-                ("arialb.ttf", 0),     # Arial Bold (alternate name)
-            ]
-            for fname, idx in ttc_candidates:
-                path = os.path.join(font_dir, fname)
-                font = _try_file(path, idx)
-                if font is not None:
-                    break
+            # ★ Try the family's OWN bold face via the font map first —
+            # e.g. "Malgun Gothic" → "Malgun Gothic Bold" → malgunbd.ttf.
+            # The hardcoded list below ignores the requested family entirely,
+            # which made bold Korean/Thai text render with YaHei (missing
+            # glyphs) even after the family was resolved for coverage.
+            for bold_name in (f"{family} Bold", f"{family} bold", f"{family}-Bold"):
+                fpath = self._resolve_font_path(bold_name)
+                if fpath:
+                    font = _try_file(fpath, 0)
+                    if font is None and fpath.lower().endswith('.ttc'):
+                        font = _try_file(fpath, 1)
+                    if font is not None:
+                        break
+
+            # Try bold face within .ttc collections (only if the family's own
+            # bold face above didn't load — this loop clobbers `font` otherwise)
+            if font is None:
+                ttc_candidates = [
+                    ("msyhbd.ttc", 0),     # Microsoft YaHei Bold
+                    ("msyh.ttc", 1),       # legacy fallback face (UI Regular on Win11!)
+                    ("simhei.ttf", 0),     # SimHei (黑体, inherently bold)
+                    ("msjhbd.ttc", 0),     # Microsoft JhengHei Bold
+                    ("msjh.ttc", 1),
+                    ("segoeui.ttc", 1),    # Segoe UI Bold
+                    ("seguibl.ttf", 0),    # Segoe UI Bold (separate)
+                    ("seguisb.ttf", 0),    # Segoe UI Semibold
+                    ("arialbd.ttf", 0),    # Arial Bold
+                    ("arialb.ttf", 0),     # Arial Bold (alternate name)
+                ]
+                for fname, idx in ttc_candidates:
+                    path = os.path.join(font_dir, fname)
+                    font = _try_file(path, idx)
+                    if font is not None:
+                        break
 
             # Try family name with bold suffixes
             if font is None:
@@ -444,10 +560,15 @@ class TextRenderer:
         outlined text element.  A single texture + single draw call is returned.
         """
         _outline_suffix = f"|{outline_width}|{outline_color}" if outline_width > 0 else ""
+        # ★ Resolve the family for THIS text first — the cache key must be
+        # built from the family that will actually render (a fallback family
+        # produces different metrics/size than the configured one).
+        font_family = self.resolve_family_for_text(text, font_family)
         cache_key = f"{text}|{font_family}|{font_size}|{font_bold}|{color}|{max_width}|{alignment}{_outline_suffix}"
 
-        # Return cached texture if text hasn't changed
+        # Return cached texture if text hasn't changed (LRU touch)
         if cache_key in self._texture_cache:
+            self._texture_cache.move_to_end(cache_key)
             return self._texture_cache[cache_key]
 
         font = self.get_font(font_family, font_size, font_bold)
@@ -526,22 +647,48 @@ class TextRenderer:
         self._texture_cache[cache_key] = tex_id
         self._texture_sizes[cache_key] = (img_w, img_h)
 
+        # ★ LRU eviction — cap live text textures so multi-hour sessions with
+        # ever-changing lyric lines don't grow VRAM without bound.  Evicted
+        # entries are the least recently used; anything drawn this frame was
+        # just touched and stays.
+        while len(self._texture_cache) > self._texture_cache_max:
+            old_key, old_tex = self._texture_cache.popitem(last=False)
+            self._texture_sizes.pop(old_key, None)
+            try:
+                glDeleteTextures(GLuint(old_tex))
+            except Exception:
+                pass
+
         return tex_id
 
     def _wrap_text(self, text: str, font, max_width: int) -> list[str]:
         """Wrap text to fit within max_width pixels."""
+        def _px(f, s) -> int:
+            b = f.getbbox(s)
+            return b[2] - b[0]
+
         lines = []
         for paragraph in text.split("\n"):
-            words = paragraph.split()
             current = ""
-            for word in words:
+            for word in paragraph.split():
                 test = current + (" " if current else "") + word
-                bbox = font.getbbox(test)
-                if bbox[2] - bbox[0] > max_width and current:
+                if _px(font, test) > max_width and current:
                     lines.append(current)
-                    current = word
-                else:
+                    current = ""
+                    test = word
+                # ★ CJK fallback: a token without spaces (Chinese/Japanese/
+                # Korean lyrics and titles) can be wider than the whole line —
+                # hard-break it per character instead of overflowing forever.
+                if _px(font, test) <= max_width:
                     current = test
+                    continue
+                for ch in test:
+                    piece = current + (" " if current else "") + ch
+                    if _px(font, piece) > max_width and current:
+                        lines.append(current)
+                        current = ch
+                    else:
+                        current = piece
             if current:
                 lines.append(current)
         return lines if lines else [text]
@@ -565,6 +712,7 @@ class TextRenderer:
         """
         if not text:
             return (10, 10)
+        font_family = self.resolve_family_for_text(text, font_family)
         font = self.get_font(font_family, font_size, font_bold)
         if max_width > 0:
             lines = self._wrap_text(text, font, max_width)

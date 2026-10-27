@@ -906,7 +906,7 @@ class QQMusicReader:
                         if _is_netease and not (title_match or artist_match):
                             _reader_log(f"SMTC ACCEPTED (netease fallback) "
                                        f"title={smtc_title!r} cur={cur_song!r}")
-                        candidates.append(("SMTC封面 [OK]", thumb.copy()))
+                        candidates.append(("SMTC封面 ✓", thumb.copy()))
                         smtc_gathered = True
                         smtc_verified = True
                         if title_match or artist_match:

@@ -43,6 +43,14 @@ from core.logs import get_logger
 
 _gl_log = get_logger("render")
 
+# ★ Optional frame profiler — imported once at module load.  Absent in
+# packaged builds; per-frame `from debug.frame_profiler import ...` used to
+# raise and swallow ImportError on every single frame.
+try:
+    from debug.frame_profiler import get_profiler as _frame_profiler_fn
+except Exception:
+    _frame_profiler_fn = None
+
 
 # ============================================================
 # Win32 types and constants
@@ -232,10 +240,9 @@ class GLRenderEngine:
         self._dib = 0
         self._dib_bits = None
         self._screen_dc = 0
-        self._pbo0 = 0  # PBO for async readback (double-buffered)
-        self._pbo1 = 0
-        self._pbo_index = 0  # which PBO to write into this frame (0 or 1)
-        self._pbo_first = True  # first frame has no previous PBO to read from
+        self._pbos: list = []  # triple-buffered PBOs for async readback
+        self._pbo_index = 0  # which PBO to write into this frame
+        self._pbo_first = 2  # frames until the ring has a 2-frames-old PBO to read
         self._pixel_buf = None
         self._fbo_w = 0
         self._fbo_h = 0
@@ -271,6 +278,16 @@ class GLRenderEngine:
         self._fullscreen_covered = False    # cached detection result
         self._fullscreen_check_time = 0.0   # last detection timestamp
         self._ulw_info = UPDATELAYEREDWINDOWINFO()  # reused struct
+        # ★ Pre-allocated ULW structures/pointers — previously re-created
+        # (4 ctypes objects + 4 pointers) on every frame.
+        self._ulw_pt_src = POINT(0, 0)
+        self._ulw_pt_dst = POINT(0, 0)
+        self._ulw_size = SIZE(0, 0)
+        self._ulw_blend = BLENDFUNCTION(AC_SRC_OVER, 0, 255, AC_SRC_ALPHA)
+        self._ulw_p_dst = ctypes.pointer(self._ulw_pt_dst)
+        self._ulw_p_sz = ctypes.pointer(self._ulw_size)
+        self._ulw_p_src = ctypes.pointer(self._ulw_pt_src)
+        self._ulw_p_blend = ctypes.pointer(self._ulw_blend)
         self._ulw_info.cbSize = ctypes.sizeof(UPDATELAYEREDWINDOWINFO)
         self._is_window_hidden = False     # ★ track ShowWindow(SW_HIDE) state
         self._active_until = 0.0          # timestamp — stay boosted until then
@@ -339,7 +356,7 @@ class GLRenderEngine:
         self._window = pyglet.window.Window(
             width=self.width,
             height=self.height,
-            caption="Music CoverOverlay",
+            caption="QQMusic Overlay NG",
             style=pyglet.window.Window.WINDOW_STYLE_BORDERLESS,
             config=gl_config,
             vsync=False,
@@ -595,39 +612,38 @@ class GLRenderEngine:
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
         self._fbo_w, self._fbo_h = w, h
 
-        # Create double-buffered PBOs for async glReadPixels
+        # Create triple-buffered PBOs for async glReadPixels
         self._init_pbo(w, h)
-        self._pbo_first = True
+        self._pbo_first = 2
 
     def _init_pbo(self, w: int, h: int) -> None:
-        """Create double-buffered PBOs for asynchronous glReadPixels.
+        """Create triple-buffered PBOs for asynchronous glReadPixels.
 
         PBOs allow the GPU to DMA pixel data to system memory without
-        stalling the pipeline. One PBO is written by glReadPixels (async)
-        while the other is mapped for CPU read (previous frame's data).
+        stalling the pipeline. Each frame writes PBO[i] and maps PBO[i-2] —
+        the two-frames-old buffer's DMA has certainly completed, so mapping
+        never stalls mid-frame (double-buffering could block when the
+        previous frame's glReadPixels hadn't finished yet).
         """
         size = w * h * 4
-        pbo0 = (GLuint * 1)()
-        pbo1 = (GLuint * 1)()
-        glGenBuffers(1, pbo0)
-        glGenBuffers(1, pbo1)
-        self._pbo0, self._pbo1 = pbo0[0], pbo1[0]
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, self._pbo0)
-        glBufferData(GL_PIXEL_PACK_BUFFER, size, None, GL_STREAM_READ)
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, self._pbo1)
-        glBufferData(GL_PIXEL_PACK_BUFFER, size, None, GL_STREAM_READ)
+        self._pbos = []
+        for _ in range(3):
+            arr = (GLuint * 1)()
+            glGenBuffers(1, arr)
+            pbo = arr[0]
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo)
+            glBufferData(GL_PIXEL_PACK_BUFFER, size, None, GL_STREAM_READ)
+            self._pbos.append(pbo)
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
 
     def _delete_pbo(self) -> None:
         """Delete PBO resources."""
         try:
-            if self._pbo0:
-                arr0 = (GLuint * 1)(self._pbo0)
-                glDeleteBuffers(1, arr0)
-            if self._pbo1:
-                arr1 = (GLuint * 1)(self._pbo1)
-                glDeleteBuffers(1, arr1)
-            self._pbo0 = self._pbo1 = 0
+            for pbo in getattr(self, '_pbos', []):
+                if pbo:
+                    arr = (GLuint * 1)(pbo)
+                    glDeleteBuffers(1, arr)
+            self._pbos = []
         except Exception:
             pass
 
@@ -983,12 +999,15 @@ class GLRenderEngine:
 
             # ★ Frame profiler — detect intermittent stutter.
             # Measures each phase independently to isolate root cause.
+            # (Module-level one-shot import: the profiler module is optional
+            # and absent in packaged builds — a per-frame import raised and
+            # swallowed ImportError 120 times/second.)
             _prof = None
-            try:
-                from debug.frame_profiler import get_profiler
-                _prof = get_profiler(self.target_fps)
-            except Exception:
-                pass
+            if _frame_profiler_fn is not None:
+                try:
+                    _prof = _frame_profiler_fn(self.target_fps)
+                except Exception:
+                    pass
 
             # Resize FBO if window size changed
             if w != self._fbo_w or h != self._fbo_h:
@@ -1091,15 +1110,26 @@ class GLRenderEngine:
                     _gl_log.error(f"paint_node({node.id}) crashed:\n{_tb.format_exc()}")
             _t2 = time.time()
 
-            # ---- PBO async readback (double-buffered) ----
+            # ---- PBO async readback (triple-buffered ring) ----
+            # Write this frame into PBO[i]; map PBO[i-2] — its DMA has had a
+            # full frame to complete, so glMapBuffer no longer risks a
+            # mid-frame stall on busy GPUs / shared-memory iGPUs.
             _size = w * h * 4
-            _write_pbo = self._pbo0 if self._pbo_index == 0 else self._pbo1
-            _read_pbo = self._pbo1 if self._pbo_index == 0 else self._pbo0
+            _write_pbo = self._pbos[self._pbo_index]
+            _read_pbo = self._pbos[(self._pbo_index + 2) % len(self._pbos)]
 
             glBindBuffer(GL_PIXEL_PACK_BUFFER, _write_pbo)
             glReadPixels(0, 0, w, h, GL_BGRA, GL_UNSIGNED_BYTE, 0)
 
-            if not self._pbo_first:
+            if self._pbo_first > 0:
+                # Ring not primed yet (first 2 frames) — read synchronously.
+                glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
+                glReadPixels(0, 0, w, h, GL_BGRA, GL_UNSIGNED_BYTE, self._pixel_buf)
+                _dest = ctypes.cast(self._dib_bits, ctypes.POINTER(ctypes.c_ubyte))
+                ctypes.memmove(ctypes.addressof(_dest.contents),
+                               self._pixel_buf, _size)
+                self._pbo_first -= 1
+            else:
                 glBindBuffer(GL_PIXEL_PACK_BUFFER, _read_pbo)
                 _mapped = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY)
                 if _mapped:
@@ -1115,38 +1145,29 @@ class GLRenderEngine:
                         except Exception:
                             pass
                     glUnmapBuffer(GL_PIXEL_PACK_BUFFER)
-            else:
-                glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
-                glReadPixels(0, 0, w, h, GL_BGRA, GL_UNSIGNED_BYTE, self._pixel_buf)
-                _dest = ctypes.cast(self._dib_bits, ctypes.POINTER(ctypes.c_ubyte))
-                ctypes.memmove(ctypes.addressof(_dest.contents),
-                               self._pixel_buf, _size)
-                self._pbo_first = False
 
-            self._pbo_index = 1 - self._pbo_index
+            self._pbo_index = (self._pbo_index + 1) % len(self._pbos)
             glBindBuffer(GL_PIXEL_PACK_BUFFER, 0)
             _t_read = time.time()
 
             # ---- UpdateLayeredWindowIndirect (full window) ----
             if self._hwnd:
                 global_alpha = max(1, min(255, int(self._opacity * 255)))
-                pt_src = POINT(0, 0)
-                pt_dst = POINT(self._window.get_location()[0], self._window.get_location()[1])  # type: ignore
-                win_sz = SIZE(w, h)
-                blend = BLENDFUNCTION(AC_SRC_OVER, 0, global_alpha, AC_SRC_ALPHA)
+                _loc = self._window.get_location()
+                self._ulw_pt_dst.x = _loc[0]
+                self._ulw_pt_dst.y = _loc[1]
+                self._ulw_size.cx = w
+                self._ulw_size.cy = h
+                self._ulw_blend.SourceConstantAlpha = global_alpha
 
-                _p_dst = ctypes.pointer(pt_dst)
-                _p_sz = ctypes.pointer(win_sz)
-                _p_src = ctypes.pointer(pt_src)
-                _p_blend = ctypes.pointer(blend)
                 # prcDirty=NULL forces DWM to process the entire window.
                 self._ulw_info.hdcDst = 0
-                self._ulw_info.pptDst = _p_dst
-                self._ulw_info.psize = _p_sz
+                self._ulw_info.pptDst = self._ulw_p_dst
+                self._ulw_info.psize = self._ulw_p_sz
                 self._ulw_info.hdcSrc = self._mem_dc
-                self._ulw_info.pptSrc = _p_src
+                self._ulw_info.pptSrc = self._ulw_p_src
                 self._ulw_info.crKey = 0
-                self._ulw_info.pblend = _p_blend
+                self._ulw_info.pblend = self._ulw_p_blend
                 self._ulw_info.dwFlags = ULW_ALPHA
                 self._ulw_info.prcDirty = None  # NULL → full window
 
@@ -1189,6 +1210,18 @@ class GLRenderEngine:
                 self._delete_dib()
                 self._init_fbo()
                 self._init_dib()
+                # ★ Context loss invalidates every texture/VAO id, but the
+                # painter/text caches still believed their old ids were live —
+                # covers and text rendered blank until the next song change.
+                # Release cached GL objects so they are recreated from scratch.
+                try:
+                    self._painter.clear_textures()
+                except Exception as _ct_exc:
+                    _gl_log.warn(f"painter texture clear failed: {_ct_exc}")
+                try:
+                    self._painter._text_renderer.clear_cache()
+                except Exception as _ct_exc:
+                    _gl_log.warn(f"text cache clear failed: {_ct_exc}")
                 self._painter.init_gl()
                 _gl_log.warn("GL resources rebuilt after draw crash")
             except Exception as _rebuild_exc:
@@ -1362,13 +1395,13 @@ class GLRenderEngine:
         for eid, lb in _LABELS.items():
             node = self.scene.get(eid)
             visible = node.visible if node else True
-            items.append((f"  {'[x]' if visible else '[ ]'} {lb}",
+            items.append((f"  {'✓' if visible else '☐'} {lb}",
                           lambda eid=eid: self._menu_toggle_element(eid), False))
         items.append(("---", None, False))
         items.append(("  歌曲信息", lambda: self._menu_song_info(screen_x, screen_y), False))
-        items.append((f"  {'[x]' if self.always_on_top else '[ ]'} 窗口置顶",
+        items.append((f"  {'✓' if self.always_on_top else '☐'} 窗口置顶",
                       self._menu_toggle_topmost, False))
-        items.append((f"  {'[x]' if self.click_through else '[ ]'} 鼠标穿透",
+        items.append((f"  {'✓' if self.click_through else '☐'} 鼠标穿透",
                       self._menu_toggle_clickthrough, False))
         items.append(("---", None, False))
         items.append(("  退出", self._menu_exit, False))

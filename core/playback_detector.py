@@ -115,8 +115,12 @@ class PlaybackStateDetector:
         # SMTC tracking (internal — no dependency on progress.py)
         self._last_smtc_pos: float = -1.0
         self._smtc_advancing: bool = False
-        self._smtc_stuck_frames: int = 0
-        self._smtc_absent_frames: int = 0
+        # ★ Time-based stuck/absence thresholds (frame counts scaled with fps,
+        # which made "10s" become 5s at 120 fps).
+        self._smtc_last_move_time: float = time.time()
+        self._smtc_absent_since: float = 0.0
+        self._smtc_stuck_after_s: float = 10.0    # SMTC frozen → PLAYING_STUCK
+        self._smtc_absent_after_s: float = 0.5    # no status → SESSION_LOST
 
         # Player tracking
         self._player_was_running: bool = False
@@ -162,16 +166,16 @@ class PlaybackStateDetector:
         Uses only public APIs — no dependency on progress.py internals.
         """
         status = (smtc_status or "").upper()
+        now = time.time()
 
-        # Track SMTC position advancement internally
+        # Track SMTC position advancement internally (time-based)
         if abs(smtc_pos - self._last_smtc_pos) > 0.3:
             self._smtc_advancing = True
-            self._smtc_stuck_frames = 0
-        elif smtc_pos > 0 and self._last_smtc_pos > 0:
-            self._smtc_stuck_frames += 1
+            self._smtc_last_move_time = now
         self._last_smtc_pos = smtc_pos
         is_advancing = self._smtc_advancing
-        is_stuck = self._smtc_stuck_frames > 600  # ~10s at 60fps
+        is_stuck = (smtc_pos > 0
+                    and now - self._smtc_last_move_time > self._smtc_stuck_after_s)
 
         candidate = self._evaluate(
             status=status,
@@ -204,11 +208,12 @@ class PlaybackStateDetector:
             self._last_song = song_name
             self._song_stable_frames = 1
 
-        # Track SMTC absence
+        # Track SMTC absence (time-based)
         if status in ("", "NO_SESSION"):
-            self._smtc_absent_frames += 1
+            if self._smtc_absent_since == 0.0:
+                self._smtc_absent_since = now
         else:
-            self._smtc_absent_frames = 0
+            self._smtc_absent_since = 0.0
 
         return self.state
 
@@ -229,7 +234,8 @@ class PlaybackStateDetector:
 
         # ── Layer 2: SMTC session state ──
         if status in ("", "NO_SESSION"):
-            if self._smtc_absent_frames > 30:
+            if self._smtc_absent_since != 0.0 and (
+                    time.time() - self._smtc_absent_since > self._smtc_absent_after_s):
                 self._last_eval_reason = TransitionReason.SMTC_LOST
                 return MusicEcoState.SESSION_LOST
             self._last_eval_reason = TransitionReason.SMTC_LOST

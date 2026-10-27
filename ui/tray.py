@@ -52,7 +52,7 @@ class TrayManager:
     def _build_icon(self):
         img = self._load_icon()
         menu = self._build_menu()
-        icon = pystray.Icon("Music_CoverOverlay", img, "Music CoverOverlay", menu=menu)
+        icon = pystray.Icon("QQMusicOverlayNG", img, "QQMusic Overlay NG", menu=menu)
         return icon
 
     def _load_icon(self):
@@ -71,10 +71,10 @@ class TrayManager:
         artist = state.get("artist", "")
 
         # Markers for toggle state
-        chk_on = "  [x] "
-        chk_off = "  [ ] "
+        chk_on = "  ✓ "
+        chk_off = "  ☐ "
 
-        # Helper: call the action handler directly (nuclear option).
+        # ★ Helper: call the action handler directly (nuclear option).
         # Queues (cmd_queue, gl_queue) are kept as fallbacks only.
         _tray_log = os.path.join(os.environ.get("TEMP", "."), "qqoverlay_tray_diag.log")
         def _dispatch(cmd: str):
@@ -109,9 +109,9 @@ class TrayManager:
 
         # ---- Song info (if playing) ----
         if song:
-            items.append(pystray.MenuItem(f"  {song[:30]}", None, enabled=False))
+            items.append(pystray.MenuItem(f"  ♫ {song[:30]}", None, enabled=False))
             if artist:
-                items.append(pystray.MenuItem(f"  - {artist[:30]}", None, enabled=False))
+                items.append(pystray.MenuItem(f"     {artist[:30]}", None, enabled=False))
             items.append(pystray.Menu.SEPARATOR)
 
         # ---- Actions ----

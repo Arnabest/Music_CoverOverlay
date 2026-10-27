@@ -1,10 +1,19 @@
 """Progress Tracker — SMTC + wall-clock merge.
 
-Short songs (≤7:09): SMTC covers entire song. Just use s_pos directly.
-Long songs (>7:09): SMTC timeline wraps. Wall-clock takes over after cycle wrap.
+Short songs (≤ one SMTC cycle): SMTC covers the entire song directly.
+Long songs: the QQ Music client pushes SMTC timeline values through a
+32-bit 100ns tick counter, so BOTH position and end_time are the true
+value mod 429.4967296s (= 2^32 × 100ns, empirically confirmed 2026-10-27:
+a 690.027s Dvořák movement reported end_time 260.5303 = 690.027 − 429.4967,
+and the position wrapped 429.49 → 0.32 mid-playback).  This module counts
+those wraps (k) and reconstructs true position/duration; the wall clock
+remains only for players that provide no timeline at all (NetEase).
 """
 import time
 from typing import Optional
+
+# 2^32 ticks of 100ns — the QQ Music SMTC timeline counter period.
+SMTC_TICK_CYCLE = 2 ** 32 / 10 ** 7   # 429.4967296 s
 
 
 def format_time(seconds: float) -> str:
@@ -29,8 +38,9 @@ class ProgressTracker:
 
         # Guard: has SMTC delivered valid data?
         self._has_data: bool = False
-        # Wall-clock origin
-        self._song_start: float = 0.0
+        # Wall-clock origin (never 0 — a 0 origin would make _wall an absolute
+        # timestamp if the wall branch ran before the first reset())
+        self._song_start: float = time.time()
         # Previous s_pos (for cycle-wrap detection)
         self._prev: float = -1.0
         # Wall-clock lock (cycle-wrap handling)
@@ -53,6 +63,12 @@ class ProgressTracker:
         # session bounces (Chrome↔QQMusic) and position freezes for hours
         self._stuck_pos: float = 0.0      # last position value for change detection
         self._stuck_since: float = 0.0     # wall clock when position last changed
+        # ★ Modulo reconstruction state (see module docstring): the client
+        # folds SMTC position/end_time through a 32-bit 100ns tick counter;
+        # _wrap_k counts boundary crossings so true values can be restored.
+        self._wrap_k: int = 0
+        self._prev_raw_pos: float = -1.0
+        self._prev_raw_t: float = 0.0
 
     def set_smtc_engine(self, engine) -> None:
         self._smtc = engine
@@ -78,6 +94,10 @@ class ProgressTracker:
         # ★ Bug #181: reset stuck detection on manual reset
         self._stuck_pos = 0.0
         self._stuck_since = time.time()
+        # ★ Modulo reconstruction: new song → wrap count restarts
+        self._wrap_k = 0
+        self._prev_raw_pos = -1.0
+        self._prev_raw_t = 0.0
 
     def update(self, reader_duration: float = 0.0, song: str = "", artist: str = ""):
         # ★ Defense: initialize all auto-reset variables before try block.
@@ -100,6 +120,44 @@ class ProgressTracker:
             _wall = time.time() - self._song_start
 
             is_playing = (status == "PLAYING")
+            s_pos_raw = s_pos   # pre-reconstruction value (Bug #171 gate reads this)
+
+            # ★ Modulo reconstruction: the client folds timeline values through
+            # a 32-bit 100ns tick counter (period 429.4967296s — confirmed
+            # empirically: 690.027s piece reported end_time 260.5303 and the
+            # position wrapped 429.49 → 0.32).  k counts boundary crossings
+            # with a TIGHT signature (previous sample within ~2s of the
+            # boundary, current sample near zero, small update interval) so
+            # large in-cycle seeks are never misread as wraps.  Known limit:
+            # a seek that itself crosses the boundary is invisible in modulo
+            # space — k self-corrects at the next observed wrap or song change.
+            cycle = SMTC_TICK_CYCLE
+            _now_s = time.time()
+            _dt = _now_s - self._prev_raw_t if self._prev_raw_t > 0 else 999.0
+            if (0 < _dt < 5.0 and self._prev_raw_pos >= 0
+                    and self._prev_raw_pos >= cycle - (_dt + 2.0)
+                    and s_pos_raw <= (_dt + 2.0)):
+                self._wrap_k += 1
+            self._prev_raw_pos = s_pos_raw
+            self._prev_raw_t = _now_s
+            s_pos = s_pos_raw + self._wrap_k * cycle
+            # s_dur stays RAW here — _resolve_duration reconstructs it with a
+            # better anchor (the API interval) than the observed wrap count.
+            self._s_dur_raw = s_dur
+
+            # ★ Snapshot-age extrapolation: the SMTC position is the value at
+            # the player's LAST timeline update, not "now".  Adding the
+            # snapshot age (when plausible) restores ~1s-level accuracy.
+            if is_playing:
+                try:
+                    _tl_at = smtc.timeline_updated_at
+                except Exception:
+                    _tl_at = 0.0
+                if _tl_at > 0:
+                    _age = time.time() - _tl_at
+                    if 0.0 <= _age <= 30.0:
+                        s_pos += _age
+
             is_paused = (status == "PAUSED")
             is_opened = (status == "OPENED")
             is_no_session = (status in ("", "NO_SESSION"))
@@ -177,7 +235,11 @@ class ProgressTracker:
                     and is_playing
                     and self._same_track(song, artist, smtc_title, smtc_artist)
                 )
-                if 0 < s_pos < 5.0:
+                # ★ s_pos_raw (the mod-space value) is the right release
+                # signal here: a reconstructed long-song position sits far
+                # above 5s and would never release the gate.  Raw near zero
+                # = the player's counter actually restarted = new song.
+                if 0 < s_pos_raw < 5.0:
                     self._fresh_reset = False  # SMTC confirmed new song
                     self._prev = -1.0  # ★ clear stale _prev to avoid false cycle-wrap
                     if s_pos > 0.5:
@@ -215,7 +277,7 @@ class ProgressTracker:
                 elif is_no_session:
                     pass  # hold position
 
-                elif self._is_short(reader_duration, m_dur, s_dur, song, artist):
+                elif self._is_short(reader_duration, m_dur, song, artist):
                     # ★ Short song: SMTC never wraps. Simple direct tracking.
                     self.position = s_pos if s_pos > 0 else self.position
                     self._song_start = time.time() - max(s_pos, 0)
@@ -239,11 +301,14 @@ class ProgressTracker:
                             smtc_active = False
 
                     if self._locked:
+                        # Dormant since the modulo reconstruction landed: true
+                        # positions never wrap mid-song anymore, so nothing
+                        # arms _locked=True.  Kept for state compatibility.
                         self.position = max(0.0, self._lock_pos + (_wall - self._lock_wall))
                         if prev > 0 and abs(s_pos - prev) > 5:
                             if s_pos < 2.0:
                                 pass  # cycle recovery
-                            elif s_pos < 420:
+                            elif s_pos < SMTC_TICK_CYCLE:
                                 # ★ Bug #168: guard against false unlock
                                 if _wall - self._lock_at < 3.0:
                                     pass
@@ -257,25 +322,18 @@ class ProgressTracker:
                     elif smtc_active:
                         self.position = s_pos
                         self._song_start = time.time() - s_pos
-                        # ★ Bug #170 / HC-012: skip wall-lock detection for
-                        # 3 frames after reset() to let SMTC switch to new song.
+                        # ★ The old wall-lock trigger (`prev > 0 and s_pos < 2.0`
+                        # → lock) is REMOVED: with modulo reconstruction the
+                        # reconstructed position never drops mid-song, and the
+                        # old heuristic mis-armed on EVERY long-song start
+                        # (s_pos < 2.0 for the first two seconds), freezing the
+                        # bar at ~0.5s (observed in the 2026-10-27 simulation).
                         if self._skip_wall_lock_frames > 0:
                             self._skip_wall_lock_frames -= 1
-                        elif prev > 0 and s_pos < 2.0:
-                            self._locked = True
-                            self._lock_pos = prev
-                            self._lock_wall = _wall
-                            self._lock_at = _wall
                     else:
                         self.position = _wall
-                        # ★ Bug #170 / HC-012: same guard in wall-clock path.
                         if self._skip_wall_lock_frames > 0:
                             self._skip_wall_lock_frames -= 1
-                        elif prev > 0 and s_pos < 2.0 and _wall > 10:
-                            self._locked = True
-                            self._lock_pos = prev
-                            self._lock_wall = _wall
-                            self._lock_at = _wall
 
                     # Prev preservation
                     if prev < 0:
@@ -355,27 +413,43 @@ class ProgressTracker:
 
     # ── Helpers ──────────────────────────────────────────────────
 
-    def _is_short(self, rdur: float, mdur: float, s_dur: float,
+    def _is_short(self, rdur: float, mdur: float,
                   song: str, artist: str) -> bool:
-        if self._locked or self.position > 420:
-            return False
-        if song and self._learned(song, artist, 420):
-            return False
+        """True when the song fits within one SMTC timeline cycle.
+
+        A song wraps (and needs reconstruction) iff its TRUE duration exceeds
+        the 32-bit tick cycle.  s_dur is deliberately NOT consulted here:
+        for long songs the client reports end_time mod cycle, which is always
+        < cycle and therefore carries no long/short signal.
+        """
+        if self._wrap_k > 0:
+            return False   # a wrap was observed — long song, by definition
         # SMTC media duration (WinRT metadata, most reliable when available)
-        if mdur >= 420:
-            return False
-        # SMTC timeline end_time: QQ Music caps at ~429s per cycle.
-        # If the timeline itself claims >= 420s, the song is at least that long.
-        if s_dur >= 420:
+        if mdur >= SMTC_TICK_CYCLE:
             return False
         # Reader duration (QQ Music window interval, cached)
-        if rdur >= 420:
+        if rdur >= SMTC_TICK_CYCLE:
+            return False
+        if song and self._learned(song, artist, int(SMTC_TICK_CYCLE)):
             return False
         return True
 
-    def _resolve_duration(self, s_dur: float, m_dur: float,
+    def _resolve_duration(self, s_dur_raw: float, m_dur: float,
                           rdur: float, song: str, artist: str) -> float:
-        is_long = not self._is_short(rdur, m_dur, s_dur, song, artist)
+        cycle = SMTC_TICK_CYCLE
+        # ★ Exact duration reconstruction: the client reports end_time mod
+        # cycle.  The API interval (rdur) pins the cycle count — round()
+        # absorbs the API's seconds-level error as long as it stays well
+        # under half a cycle (~214s).  Without rdur, fall back to the
+        # observed wrap count; short songs need no reconstruction at all.
+        if rdur >= 60 and s_dur_raw > 0:
+            k_dur = max(0, round((rdur - s_dur_raw) / cycle))
+            s_dur = s_dur_raw + k_dur * cycle
+        elif self._wrap_k > 0:
+            s_dur = s_dur_raw + self._wrap_k * cycle
+        else:
+            s_dur = s_dur_raw
+        is_long = not self._is_short(rdur, m_dur, song, artist)
         dur = 0.0
 
         if not is_long:
@@ -384,13 +458,18 @@ class ProgressTracker:
                     dur = src
                     break
         else:
-            for src in [self._learned(song, artist, 120),
-                        self._features(song, artist, 120),
-                        m_dur, rdur, s_dur]:
+            # Long song.  Priority: the rdur-anchored (or wrap-counted)
+            # reconstructed end_time (exact), then media_props metadata, then
+            # API interval, then learned heuristics.  s_dur is only trusted
+            # in the chain when it carries a reconstructed true value.
+            s_dur_trusted = rdur >= 60 or self._wrap_k > 0
+            chain = [s_dur if s_dur_trusted else 0.0, m_dur, rdur,
+                     self._learned(song, artist, 120), self._features(song, artist, 120)]
+            for src in chain:
                 if src >= 60:
                     dur = src
                     break
-            if not dur and s_dur >= 60:
+            if not dur and s_dur_trusted and s_dur >= 60:
                 ref = max(m_dur, rdur)
                 if ref >= 60 and ref > s_dur * 1.2:
                     dur = ref

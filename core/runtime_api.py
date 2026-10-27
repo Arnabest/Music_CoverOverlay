@@ -126,9 +126,12 @@ class OverlayRuntimeApiServer:
             self._state = state
         if not self._write_file:
             return
-        if serialized == self._last_serialized and (now - self._last_file_write) < self._min_write_interval:
-            return
-        if (now - self._last_file_write) < self._min_write_interval and serialized == self._last_serialized:
+        # ★ Real rate limit on the file mirror: ANY write within the min
+        # interval is skipped (position changes every frame, so comparing
+        # content alone never throttled — the old double condition checked
+        # `serialized == last` twice and passed changed payloads straight
+        # through).  In-memory state above is always current regardless.
+        if (now - self._last_file_write) < self._min_write_interval:
             return
         try:
             atomic_write_json(self._state_file, state, ensure_ascii=False, indent=2)

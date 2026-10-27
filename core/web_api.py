@@ -211,12 +211,23 @@ def _fetch_lyrics(songmid):
         trans_raw = data.get("trans", "")
         try:
             lyric = base64.b64decode(lyric_raw).decode("utf-8") if lyric_raw else ""
+        except UnicodeDecodeError:
+            # Rare legacy encodings — gb18030 covers GBK/GB2312 superset
+            try:
+                lyric = base64.b64decode(lyric_raw).decode("gb18030", errors="replace")
+            except Exception:
+                lyric = ""
         except Exception:
-            lyric = lyric_raw or ""
+            lyric = ""
         try:
             trans = base64.b64decode(trans_raw).decode("utf-8") if trans_raw else ""
+        except UnicodeDecodeError:
+            try:
+                trans = base64.b64decode(trans_raw).decode("gb18030", errors="replace")
+            except Exception:
+                trans = ""
         except Exception:
-            trans = trans_raw or ""
+            trans = ""
         return lyric, trans
     except Exception:
         return "", ""

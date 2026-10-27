@@ -276,11 +276,11 @@ class OverlayWindow:
                 self._no_timeline_force_hide = True  # default: hide
                 lines = "当前播放源不支持以下功能：\n\n"
                 for i, m in enumerate(missing, 1):
-                    lines += f"  - {m}\n"
+                    lines += f"  ❌ {m}\n"
                 lines += "\n是否自动关闭相关显示选项？\n\n"
-                lines += "  是 — 自动隐藏（推荐）\n"
-                lines += "  否 — 保持显示\n\n"
-                lines += "提示：设置 → 来源 → 不再提示 可永久关闭"
+                lines += "　是 — 自动隐藏（推荐）\n"
+                lines += "　否 — 保持显示\n\n"
+                lines += "💡 设置 → 来源 → 不再提示 可永久关闭"
 
                 import ctypes as _ct
                 import threading as _thr
@@ -288,7 +288,7 @@ class OverlayWindow:
                     try:
                         r = _ct.windll.user32.MessageBoxW(
                             0, lines,
-                            "Music CoverOverlay — 功能缺失",
+                            "QQMusicOverlay NG — 功能缺失",
                             0x40 | 0x4)
                         self._no_timeline_force_hide = (r == 6)
                         if self._no_timeline_force_hide:
@@ -339,6 +339,7 @@ class OverlayWindow:
 
         # Update animation timeline
         if self.timeline.is_playing:
+            self._last_tl_update = time.perf_counter()
             self.timeline.update(dt)
 
         # Detect timeline completion — fire 'completed' event
@@ -529,7 +530,14 @@ class OverlayWindow:
                 self._state.transition("auto_hide")
 
         # Periodic snapshot save
-        if int(time.time()) % 2 == 0 and self.progress.position > 5:
+        # ★ Wall-second parity (`int(time.time()) % 2 == 0`) fired on EVERY
+        # frame within an even second (120 calls/s at 120 fps), each doing a
+        # synchronous full-file read in the render thread. Throttle by real
+        # elapsed time instead.
+        _now_ts = time.time()
+        if (_now_ts - getattr(self, '_last_snapshot_save', 0.0) >= 2.0
+                and self.progress.position > 5):
+            self._last_snapshot_save = _now_ts
             save_snapshot(
                 self.reader.song_name,
                 self.reader.artist_name,
@@ -1067,8 +1075,16 @@ class OverlayWindow:
         # ★ Timeline update + completion detection also run here (every draw
         # frame) for redundancy.  If _on_frame_update's scheduler path is
         # broken, the draw path still advances animations and completes them.
+        # ★ Frame dedup: _on_frame_update already advanced the timeline this
+        # frame → skip here.  tween.py accumulates raw dt with no wall-clock
+        # correction, so double-driving made every transition run at 2x speed.
+        # The gap guard keeps the redundancy: when the update scheduler is
+        # dead, the gap exceeds half a frame and the draw path still advances.
         if self.timeline.is_playing:
-            self.timeline.update(1.0 / max(1, self.engine.target_fps))
+            _tl_min_gap = 0.4 / max(1, self.engine.target_fps)
+            if time.perf_counter() - getattr(self, '_last_tl_update', 0.0) >= _tl_min_gap:
+                self._last_tl_update = time.perf_counter()
+                self.timeline.update(1.0 / max(1, self.engine.target_fps))
         if self._state.is_transitioning() and not self.timeline.is_playing:
             self._state.transition("completed")
 

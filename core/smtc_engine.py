@@ -87,6 +87,7 @@ class SmtcEngine:
             "title": "",
             "artist": "",
             "player": "",
+            "timeline_updated_at": 0.0,
         }
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -105,6 +106,13 @@ class SmtcEngine:
         # known to fail (e.g., QQ Music never exposes duration).
         # Reduces hundreds of futile WinRT property gets per hour.
         self._media_dur_failed: dict[str, float] = {}
+        # ★ Per-session change-event subscriptions (timeline/media/playback).
+        # Events wake the polling thread immediately instead of waiting up
+        # to poll_interval for the next blind tick.
+        self._tl_token = None
+        self._media_token = None
+        self._pb_token = None
+        self._subscribed_session = None
 
     def set_priority(self, priority: list[str]) -> None:
         """Set the detection priority order. First = highest priority.
@@ -217,6 +225,17 @@ class SmtcEngine:
             return self._state["player"]
 
     @property
+    def timeline_updated_at(self) -> float:
+        """Epoch seconds of the player's last SMTC timeline update.
+
+        0.0 when unknown or implausible (clock skew).  Consumers use the
+        snapshot age (now − this) to extrapolate the true playback position
+        instead of treating the polled position as current.
+        """
+        with self._lock:
+            return self._state["timeline_updated_at"]
+
+    @property
     def player_has_timeline(self) -> bool:
         """Whether the current SMTC player provides timeline position/duration.
 
@@ -284,7 +303,7 @@ class SmtcEngine:
             self._force_poll.wait(_interval)
             self._force_poll.clear()
 
-        # Cleanup event subscription
+        # Cleanup event subscriptions
         if self._session_change_token is not None:
             try:
                 mgr = SmtcEngine._mgr
@@ -292,6 +311,7 @@ class SmtcEngine:
                     mgr.remove_current_session_changed(self._session_change_token)
             except Exception:
                 pass
+        self._unsubscribe_session_events()
 
     def _on_session_changed(self, sender, args) -> None:
         """Callback: Windows SMTC current session changed.
@@ -309,6 +329,47 @@ class SmtcEngine:
             _smtc_logger.warn(f"session changed callback error: {e}")
         # Wake polling thread for immediate re-poll
         self._force_poll.set()
+
+    def _subscribe_session_events(self, session) -> None:
+        """Subscribe to the current session's change events (idempotent).
+
+        Timeline/media/playback change events wake the polling thread so
+        seeks, song changes and pause transitions are seen immediately
+        instead of up to poll_interval later.
+        """
+        if session is self._subscribed_session:
+            return
+        self._unsubscribe_session_events()
+        try:
+            self._tl_token = session.add_timeline_properties_changed(self._on_session_event)
+            self._media_token = session.add_media_properties_changed(self._on_session_event)
+            self._pb_token = session.add_playback_info_changed(self._on_session_event)
+            self._subscribed_session = session
+            _smtc_log("subscribed to session events (timeline/media/playback)")
+        except Exception as e:
+            _smtc_log(f"session event subscription failed: {e}")
+
+    def _unsubscribe_session_events(self) -> None:
+        try:
+            s = self._subscribed_session
+            if s is not None:
+                if self._tl_token is not None:
+                    s.remove_timeline_properties_changed(self._tl_token)
+                if self._media_token is not None:
+                    s.remove_media_properties_changed(self._media_token)
+                if self._pb_token is not None:
+                    s.remove_playback_info_changed(self._pb_token)
+        except Exception:
+            pass
+        self._tl_token = self._media_token = self._pb_token = None
+        self._subscribed_session = None
+
+    def _on_session_event(self, sender, args) -> None:
+        """WinRT threadpool callback: any session change → wake poll loop."""
+        try:
+            self._force_poll.set()
+        except Exception:
+            pass
 
     def _poll_once(self) -> None:
         """Single SMTC poll — all WinRT interaction isolated here.
@@ -343,6 +404,7 @@ class SmtcEngine:
             with self._lock:
                 self._state["pos"] = 0.0
                 self._state["playback_status"] = "NO_SESSION"
+            self._unsubscribe_session_events()
 
             # Rate-limited diagnostic — check ALL recognized players
             _diag = getattr(self, '_no_session_count', 0) + 1
@@ -382,6 +444,7 @@ class SmtcEngine:
             _smtc_log(f"{_player_label} SMTC session RECOVERED after "
                      f"{self._no_session_count} polls — resuming tracking")
         self._no_session_count = 0
+        self._subscribe_session_events(session)
 
         # Playback info
         try:
@@ -392,10 +455,25 @@ class SmtcEngine:
             pst = ""
 
         # Timeline properties
+        tl_updated = 0.0
         try:
             props = session.get_timeline_properties()
             pos = props.position.total_seconds() if props.position else 0.0
             dur = props.end_time.total_seconds() if props.end_time else 0.0
+            # ★ Snapshot timestamp — the position is the value at the player's
+            # LAST timeline update, not "now".  Consumers extrapolate with the
+            # snapshot age; reject implausible values (clock skew).
+            try:
+                _dt = props.last_updated_time
+                if _dt is not None:
+                    if _dt.tzinfo is None:
+                        import datetime as _dmod
+                        _dt = _dt.replace(tzinfo=_dmod.timezone.utc)
+                    _age = time.time() - _dt.timestamp()
+                    if -5.0 <= _age <= 3600.0:
+                        tl_updated = _dt.timestamp()
+            except Exception:
+                tl_updated = 0.0
             if self._tl_zero_logged and dur < 1 and pos < 1:
                 self._tl_zero_logged = False
                 _smtc_log(f"timeline props exist but pos={pos:.1f}s dur={dur:.1f}s "
@@ -475,7 +553,16 @@ class SmtcEngine:
             self._state.update({
                 "pos": pos, "dur": dur,
                 "playback_status": pst, "player": player,
+                "timeline_updated_at": tl_updated,
             })
+
+        # ★ Snapshot-age diagnostic — reveals the player's timeline update
+        # cadence and validates the extrapolation input in the logs.
+        if tl_updated > 0 and pst == "PLAYING":
+            _age = time.time() - tl_updated
+            _smtc_logger.rate_limited(
+                "tl_age", 60.0, "INFO",
+                f"timeline snapshot age={_age:.2f}s (pos={pos:.1f}s)")
 
         # Duration change diagnostic
         player_key = player or "__none__"

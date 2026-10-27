@@ -54,7 +54,21 @@ def _make_key(song: str, artist: str) -> str:
     return f"{song.strip().lower()}|||{artist.strip().lower()}"
 
 
+# ★ In-memory read cache — get_learned() is called 2-3x per frame from
+# progress._resolve_duration(); the old implementation re-read and re-parsed
+# the whole JSON file on every call (up to ~360 reads/s at 120 fps).
+_data_caches: dict[str, dict] = {}
+
+
 def _load(path: str) -> dict:
+    cache = _data_caches.get(path)
+    if cache is None:
+        cache = _load_from_disk(path)
+        _data_caches[path] = cache
+    return cache
+
+
+def _load_from_disk(path: str) -> dict:
     if os.path.exists(path):
         try:
             with open(path, "rb") as f:
@@ -77,8 +91,14 @@ def _load(path: str) -> dict:
 
 
 def _save(path: str, data: dict) -> None:
-    """Queue a write to disk — non-blocking, returns immediately."""
-    _write_queue.put((path, data))
+    """Queue a write to disk — non-blocking, returns immediately.
+
+    Queues a per-entry snapshot copy so the writer thread never serializes
+    a dict that another thread is mutating mid-iteration.
+    """
+    snapshot = {k: (dict(v) if isinstance(v, dict) else v)
+                for k, v in data.items()}
+    _write_queue.put((path, snapshot))
 
 
 # ---- Learned Durations ----

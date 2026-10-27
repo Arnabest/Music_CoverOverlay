@@ -33,6 +33,8 @@ class Compositor:
         self._mask_cache: dict[str, Image.Image] = {}
         # Cached SS-masked thumbnails: (id(cover), size, shape, radius, SS) → masked RGBA
         self._ss_thumb_cache: dict[tuple, Image.Image] = {}
+        # ★ Cached rounded-rect perimeters (geometry-only, see _rect_perimeter_pts)
+        self._rect_perimeter_cache: dict[tuple, list] = {}
         # Pre-allocated buffers (reused every frame to avoid allocation)
         self._ss_progress_buf: Image.Image | None = None
         self._ss_progress_buf_size: tuple[int, int] | None = None
@@ -341,11 +343,18 @@ class Compositor:
             self._draw_cover_backplate(img, x, y, size, shape, radius)
 
         # Composite cover onto main image
-        region = img.crop((x, y, x + size, y + size))
-        if region.mode != "RGBA":
-            region = region.convert("RGBA")
-        composited = Image.alpha_composite(region, thumb)
-        img.paste(composited, (x, y), composited)
+        # ★ In-place alpha composite — the old crop→alpha_composite→paste
+        # chain did three full-region copies per frame.
+        if (x >= 0 and y >= 0 and x + size <= img.width
+                and y + size <= img.height
+                and img.mode == "RGBA" and thumb.mode == "RGBA"):
+            img.alpha_composite(thumb, dest=(x, y))
+        else:
+            region = img.crop((x, y, x + size, y + size))
+            if region.mode != "RGBA":
+                region = region.convert("RGBA")
+            composited = Image.alpha_composite(region, thumb)
+            img.paste(composited, (x, y), composited)
 
         # Progress indicator on cover
         self._render_cover_progress(img, node, x, y, size, scene)
@@ -584,6 +593,25 @@ class Compositor:
             for i in range(0, len(pts) - 2, 2):
                 draw.line([pts[i], pts[i+1], pts[i+2], pts[i+3]], fill=color, width=pw)
 
+    def _rect_perimeter_pts(self, rx, ry, rs, r, arc_steps, start_pos, direction):
+        """Cached rounded-rect perimeter points rotated to start_pos.
+
+        _build_rect_perimeter + _rotate_points regenerate hundreds of points
+        with per-point trig every frame; the geometry only changes with the
+        layout parameters, so cache by those.
+        """
+        key = (rx, ry, rs, r, arc_steps, start_pos)
+        pts = self._rect_perimeter_cache.get(key)
+        if pts is None:
+            pts = self._rotate_points(
+                self._build_rect_perimeter(rx, ry, rs, r, arc_steps),
+                start_pos, rx, ry, rs)
+            if len(self._rect_perimeter_cache) > 8:
+                self._rect_perimeter_cache.clear()
+            self._rect_perimeter_cache[key] = pts
+        # Return a reversed COPY for ccw — never mutate the cached list.
+        return pts[::-1] if "ccw" in str(direction) else pts
+
     def _draw_ring(self, draw, x, y, size, progress, color, pw, node):
         """Rectangular ring around cover."""
         r = max(2, int(node.get("border_radius", 20))) if "border_radius" in node else pw
@@ -592,15 +620,11 @@ class Compositor:
         rs = size - 2 * pad
         if rs <= 0:
             return
-        # Build perimeter points
         # Auto-scale arc steps — more steps for larger sizes (SS-safe)
         arc_steps = max(24, int(rs / 5))
-        pts = self._build_rect_perimeter(rx, ry, rs, r, arc_steps)
         direction = node.get("direction", "cw")
         start_pos = node.get("start_position") or node.get("start", "topleft")
-        pts = self._rotate_points(pts, start_pos, rx, ry, rs)
-        if "ccw" in str(direction):
-            pts = list(reversed(pts))
+        pts = self._rect_perimeter_pts(rx, ry, rs, r, arc_steps, start_pos, direction)
         n = max(1, int((len(pts) - 1) * progress))
         for i in range(min(n, len(pts) - 1)):
             draw.line([pts[i][0], pts[i][1], pts[i+1][0], pts[i+1][1]], fill=color, width=pw)
@@ -614,12 +638,9 @@ class Compositor:
         if rs <= 0:
             return
         arc_steps = max(24, int(rs / 5))
-        pts = self._build_rect_perimeter(rx, ry, rs, r, arc_steps)
         direction = node.get("direction", "cw")
         start_pos = node.get("start_position") or node.get("start", "topleft")
-        pts = self._rotate_points(pts, start_pos, rx, ry, rs)
-        if "ccw" in str(direction):
-            pts = list(reversed(pts))
+        pts = self._rect_perimeter_pts(rx, ry, rs, r, arc_steps, start_pos, direction)
         n = max(1, int((len(pts) - 1) * progress))
         for i in range(min(n, len(pts) - 1)):
             draw.line([pts[i][0], pts[i][1], pts[i+1][0], pts[i+1][1]], fill=color, width=pw)
@@ -769,6 +790,16 @@ class Compositor:
         font_family = node.data.get("font_family", "Microsoft YaHei")
         font_size = int(node.data.get("font_size", 14))
         font_bold = node.data.get("font_bold", False)
+        # ★ Script-aware font fallback (parity with the GL painter): YaHei
+        # lacks Hangul/Thai/Arabic/Hebrew glyphs — foreign lyrics rendered
+        # as tofu.  Resolve before loading the font so the image cache key
+        # (which includes font_family) matches what actually renders.
+        try:
+            from render.text import get_text_renderer
+            font_family = get_text_renderer().resolve_family_for_text(
+                text, font_family)
+        except Exception:
+            pass
         font = self._get_font(font_family, font_size, font_bold)
         color_hex = node.data.get("color", "#ffffff")
         color = ImageColor.getrgb(color_hex)
@@ -885,6 +916,16 @@ class Compositor:
         font_family = node.data.get("font_family", "Microsoft YaHei")
         font_size = int(node.data.get("font_size", 14))
         font_bold = node.data.get("font_bold", False)
+        # ★ Script-aware font fallback (parity with the GL painter): YaHei
+        # lacks Hangul/Thai/Arabic/Hebrew glyphs — foreign lyrics rendered
+        # as tofu.  Resolve before loading the font so the image cache key
+        # (which includes font_family) matches what actually renders.
+        try:
+            from render.text import get_text_renderer
+            font_family = get_text_renderer().resolve_family_for_text(
+                text, font_family)
+        except Exception:
+            pass
         font = self._get_font(font_family, font_size, font_bold)
         color_hex = node.data.get("color", "#cccccc")
         color = ImageColor.getrgb(color_hex)
@@ -1085,15 +1126,26 @@ class Compositor:
     def _wrap_text(self, text: str, font, max_width: int) -> list[str]:
         lines = []
         for paragraph in text.split("\n"):
-            words = paragraph.split()
             current = ""
-            for word in words:
+            for word in paragraph.split():
                 test = current + (" " if current else "") + word
                 if font.getlength(test) > max_width and current:
                     lines.append(current)
-                    current = word
-                else:
+                    current = ""
+                    test = word
+                # ★ CJK fallback: a token without spaces (Chinese/Japanese/
+                # Korean lyrics and titles) can be wider than the whole line —
+                # hard-break it per character instead of overflowing forever.
+                if font.getlength(test) <= max_width:
                     current = test
+                    continue
+                for ch in test:
+                    piece = current + (" " if current else "") + ch
+                    if font.getlength(piece) > max_width and current:
+                        lines.append(current)
+                        current = ch
+                    else:
+                        current = piece
             if current:
                 lines.append(current)
         return lines if lines else [text]

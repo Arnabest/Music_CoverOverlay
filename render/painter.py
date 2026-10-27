@@ -111,9 +111,34 @@ class Painter:
         self._cover_flip_key = 0
         self._cover_flipped = None
 
+        # ★ Instance-level texture caches.  These were class attributes —
+        # mutable class attrs are shared across Painter instances.
+        # _time_tex_cache: slot → (key, tex_id, w, h); see _get_time_texture.
+        self._time_tex_cache: dict = {}
+        self._time_tex_garbage: list = []
+        self._bar_tex_cache: dict[tuple, tuple[int, float]] = {}
+        self._arc_tex_cache: dict[tuple, tuple[int, float]] = {}
+
     def init_gl(self) -> None:
         """Initialize OpenGL resources (call after context creation)."""
         self._create_quad_vao()
+
+    def _create_quad_vao(self) -> None:
+        """Create a fullscreen quad VAO for textured rendering."""
+        # ★ Context-loss rebuilds call this repeatedly — release the old
+        # VAO/VBO first or every rebuild leaks GPU objects.
+        if getattr(self, '_vao', 0):
+            try:
+                _delete_vertex_array(self._vao)
+            except Exception:
+                pass
+            self._vao = 0
+        if getattr(self, '_vbo', 0):
+            try:
+                _delete_buffer(self._vbo)
+            except Exception:
+                pass
+            self._vbo = 0
 
     def _create_quad_vao(self) -> None:
         """Create a fullscreen quad VAO for textured rendering."""
@@ -456,22 +481,29 @@ class Painter:
         if mode == "bar" and node.data.get("time_visible", node.data.get("time_text", {}).get("visible", True)):
             self._paint_time_text(node)
 
-    # ★ Time-text texture: single reusable texture, re-specified with
-    # glTexImage2D when the time string changes (~1/sec).  No cache, no
-    # gen/delete churn, no atlas UV issues — just one long-lived tex_id.
-    _time_tex_garbage: list = []
+    # ★ Time-text texture cache.  Keyed per caller slot (standalone time,
+    # bar time) — each slot owns an independent texture object so callers
+    # never share a tex_id (glTexImage2D overwrites would corrupt content,
+    # see Bug #172 / HC-014).  The texture is only re-rasterized and
+    # re-uploaded when the text/style key changes (~1/sec), not every frame.
 
     def _get_time_texture(self, text: str, font_family: str, font_size: int,
                           font_bold: bool, color_rgb: tuple,
                           outline_width: int = 0,
-                          outline_rgb: tuple = (0, 0, 0)) -> tuple[int, int, int]:
-        """Render time text to PIL, upload to a NEW GL texture each call.
+                          outline_rgb: tuple = (0, 0, 0),
+                          slot: str = "time") -> tuple[int, int, int]:
+        """Render time text to PIL and upload to a per-slot cached texture.
 
-        Returns (tex_id, tex_w, tex_h).  Each call creates a fresh texture
-        because multiple callers (standalone time, bar time, lyrics outline)
-        must NOT share a single texture — glTexImage2D overwrites would
-        corrupt the texture content between render calls.
+        Returns (tex_id, tex_w, tex_h).  If the (text, style) key for this
+        slot is unchanged, returns the cached texture with zero GL work.
+        Slots are isolated — two callers must never reuse one tex_id.
         """
+        key = (text, font_family, int(font_size), bool(font_bold),
+               tuple(color_rgb), int(outline_width), tuple(outline_rgb))
+        cached = self._time_tex_cache.get(slot)
+        if cached is not None and cached[0] == key:
+            return cached[1], cached[2], cached[3]
+
         import PIL.Image, PIL.ImageDraw
         font = self._text_renderer.get_font(font_family, font_size, font_bold)
         outline_width = max(0, int(outline_width))
@@ -536,12 +568,11 @@ class Painter:
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-        # ★ Queue for cleanup next frame (after draw calls complete)
-        _garbage = getattr(self, '_time_tex_garbage', None)
-        if _garbage is None:
-            _garbage = []
-            self._time_tex_garbage = _garbage
-        _garbage.append(tex_id)
+        # ★ Retire the previous slot texture via the garbage queue (deleted
+        # next frame, after this frame's draw calls complete), then cache.
+        if cached is not None:
+            self._time_tex_garbage.append(cached[1])
+        self._time_tex_cache[slot] = (key, tex_id, img.width, img.height)
         return tex_id, img.width, img.height
 
     def paint_progress_time(self, node: ProgressTimeNode) -> None:
@@ -579,7 +610,8 @@ class Painter:
 
         tex_id, tex_w, tex_h = self._get_time_texture(
             text, font_family, font_size, font_bold, color_rgb,
-            outline_width=outline_width, outline_rgb=outline_rgb)
+            outline_width=outline_width, outline_rgb=outline_rgb,
+            slot="time_standalone")
         self._diag_time_text("standalone", text, pos, dur, tex_id, tex_w, tex_h,
                              node.abs_x, node.abs_y, node)
         self._draw_textured_quad_at(
@@ -657,7 +689,7 @@ class Painter:
         self._draw_textured_quad(node, tex_id, tex_w, tex_h, node.opacity)
 
     # Cache for bar progress textures: (w, h, pct_key, color_key) → tex_id
-    _bar_tex_cache: dict[tuple, tuple[int, float]] = {}
+    # (instance-level — initialized in __init__)
 
     def _render_bar_texture(self, w, h, progress, bg_color, fg_color, direction="lr"):
         from PIL import Image, ImageDraw
@@ -710,7 +742,7 @@ class Painter:
         return tex_id
 
     # Cache for arc progress textures: (size, progress_pct, mode, color_key) → tex_id
-    _arc_tex_cache: dict[tuple, tuple[int, float]] = {}
+    # (instance-level — initialized in __init__)
 
     def _render_arc_texture(self, size: int, progress: float,
                              mode: str, node, color: tuple) -> int:
@@ -744,7 +776,18 @@ class Painter:
         pct_key = int(progress * 100)  # 1% cache granularity
         color_key = f"{color[0]},{color[1]},{color[2]}"
         bg_key = f"{bg_color[0]},{bg_color[1]},{bg_color[2]}"
-        cache_key = (size, ss, pct_key, mode, color_key, cap_style, bg_key)
+
+        # ★ Roundrect/square corner radius (scales with cover border_radius,
+        # size and supersample) — must be part of the cache key or changing
+        # the cover radius keeps showing the old arc texture.
+        rr_radius = 0
+        if mode in ("roundrect", "square"):
+            cover_r = float(getattr(self, '_cover_border_radius', 20))
+            if mode == "square":
+                cover_r = 0
+            cover_sz = max(1, getattr(self, '_cover_size', 180))
+            rr_radius = max(0, int(cover_r * (size / cover_sz) * ss))
+        cache_key = (size, ss, pct_key, mode, color_key, cap_style, bg_key, rr_radius)
 
         # Check cache
         if cache_key in self._arc_tex_cache:
@@ -782,17 +825,9 @@ class Painter:
         if mode == "ring":
             draw.arc(bbox, 0, 360, fill=bg_color, width=pw)
 
-        # ★ Roundrect / Square mode: segmented path (rounded-rect or sharp rectangle).
-        # Corner radius follows cover border_radius; square → 0 (sharp corners).
-        rr_radius = 0
-        if mode in ("roundrect", "square"):
-            cover_r = float(getattr(self, '_cover_border_radius', 20))
-            if mode == "square":
-                cover_r = 0
-            cover_sz = max(1, getattr(self, '_cover_size', 180))
-            rr_radius = max(0, int(cover_r * (size / cover_sz) * ss))
-
-        # ★ Draw progress portion
+        # ★ Roundrect / Square mode: segmented path (rounded-rect or sharp
+        # rectangle).  rr_radius is computed above and included in the
+        # cache key.
         if mode in ("roundrect", "square"):
             self._draw_roundrect_progress(
                 draw, bbox, rr_radius, start_angle, sweep, color, pw,
@@ -1137,7 +1172,8 @@ class Painter:
         # and standalone progress_time use the same reliable outline path.
         tex_id, tex_w, tex_h = self._get_time_texture(
             time_text, font_family, font_size, False, color_rgb,
-            outline_width=outline_width, outline_rgb=outline_rgb)
+            outline_width=outline_width, outline_rgb=outline_rgb,
+            slot="time_bar")
 
         # ★ Arc/ring mode: position time text relative to cover, not progress node
         if mode in ("arc", "ring"):
@@ -1352,6 +1388,7 @@ class Painter:
                 except Exception:
                     pass
             self._time_tex_garbage.clear()
+        self._time_tex_cache.clear()
 
     # ---- Spin state (delegated to shared SpinController) ----
 
@@ -1611,6 +1648,36 @@ class Painter:
                 mode=mode,
             )
 
+    def _bake_text(self, text, family, size, bold, color_rgb,
+                   outline_rgb, outline_width, max_w, align):
+        """Render text to a cached GL texture with the outline pre-composited.
+
+        Returns (tex_id, w, h).  Replaces the old two-texture scheme (plain
+        text texture + outline-colored text texture drawn at 8 offsets = 9
+        GPU draws per block) with one texture + one draw.  The cache key
+        mirrors text.py's internal render_to_texture key including the
+        outline suffix so the baked texture's exact size is retrieved.
+        """
+        tex_id = self._text_renderer.render_to_texture(
+            text, family, size, bold, color_rgb, max_w, align,
+            outline_width=outline_width, outline_color=outline_rgb)
+        # ★ Key must use the family render_to_texture actually resolved for
+        # this text (script-aware fallback) — otherwise get_texture_size
+        # looks up a different cache entry than the one just created.
+        family = self._text_renderer.resolve_family_for_text(text, family)
+        key = f"{text}|{family}|{size}|{bold}|{color_rgb}|{max_w}|{align}"
+        if outline_width > 0:
+            key += f"|{outline_width}|{outline_rgb}"
+        w, h = self._text_renderer.get_texture_size(key)
+        return tex_id, w, h
+
+    @staticmethod
+    def _outline_rgb_of(outline_color: str) -> tuple:
+        """Normalize an outline color string to an RGB tuple."""
+        if outline_color and outline_color.startswith("#"):
+            return Painter._hex_to_rgb(outline_color)
+        return (0, 0, 0)
+
     def _render_lyrics_merged(
         self, node, active_lines, *,
         main_color, main_family, main_size, main_bold,
@@ -1625,25 +1692,27 @@ class Painter:
         main_block = "\n".join(main_lines_text)
         has_trans = any(trans_lines_text)
 
-        # Render main texture
+        main_ow = max(0, int(outline_width))
+        trans_ow = max(1, int(outline_width) // 2) if outline_width > 0 else 0
+        _outline_rgb = self._outline_rgb_of(outline_color)
+
+        # Render main texture (outline baked in)
         main_tex_id = None
         main_tex_w = main_tex_h = 0
         if main_block.strip():
-            main_tex_id = self._text_renderer.render_to_texture(
-                main_block, main_family, main_size, main_bold, main_color, max_w, align)
-            main_cache = f"{main_block}|{main_family}|{main_size}|{main_bold}|{main_color}|{max_w}|{align}"  # no outline suffix — matches render_to_texture default
-            main_tex_w, main_tex_h = self._text_renderer.get_texture_size(main_cache)
+            main_tex_id, main_tex_w, main_tex_h = self._bake_text(
+                main_block, main_family, main_size, main_bold, main_color,
+                _outline_rgb, main_ow, max_w, align)
 
-        # Render trans texture
+        # Render trans texture (outline baked in)
         trans_tex_id = None
         trans_tex_w = trans_tex_h = 0
         if has_trans:
             trans_block = "\n".join(trans_lines_text)
             if trans_block.strip():
-                trans_tex_id = self._text_renderer.render_to_texture(
-                    trans_block, trans_family, trans_size, False, trans_color, max_w, align)
-                trans_cache = f"{trans_block}|{trans_family}|{trans_size}|False|{trans_color}|{max_w}|{align}"  # matches render_to_texture default (no outline)
-                trans_tex_w, trans_tex_h = self._text_renderer.get_texture_size(trans_cache)
+                trans_tex_id, trans_tex_w, trans_tex_h = self._bake_text(
+                    trans_block, trans_family, trans_size, False, trans_color,
+                    _outline_rgb, trans_ow, max_w, align)
 
         # Calculate layout
         gap = line_spacing + 2
@@ -1664,20 +1733,15 @@ class Painter:
         # Draw main block
         if main_tex_id:
             mx = _block_x(main_tex_w)
-            self._draw_lyrics_textured(mx, start_y, main_tex_w, main_tex_h,
-                                       main_tex_id, node.opacity,
-                                       main_block, main_family, main_size, main_bold,
-                                       outline_color, outline_width, max_w, align)
+            self._draw_textured_quad_at(mx, start_y, main_tex_w, main_tex_h,
+                                        main_tex_id, node.opacity)
 
         # Draw trans block below
         if trans_tex_id:
             tx = _block_x(trans_tex_w)
             ty = start_y + main_tex_h + gap
-            trans_block = "\n".join(trans_lines_text)
-            self._draw_lyrics_textured(tx, ty, trans_tex_w, trans_tex_h,
-                                       trans_tex_id, node.opacity * 0.95,
-                                       trans_block, trans_family, trans_size, False,
-                                       outline_color, max(1, outline_width // 2), max_w, align)
+            self._draw_textured_quad_at(tx, ty, trans_tex_w, trans_tex_h,
+                                        trans_tex_id, node.opacity * 0.95)
 
     def _render_lyrics_separate(
         self, node, active_lines, *,
@@ -1693,21 +1757,30 @@ class Painter:
           [trans text]  ← dimmer, smaller font
           <gap>
         """
-        # First pass: measure all line pairs (use measure_text to avoid GL upload)
+        # ★ First pass: bake every line texture (outline pre-composited) and
+        # take exact sizes from the baked textures — outline adds stroke
+        # padding the plain measure_text() doesn't know about.
+        _outline_rgb = self._outline_rgb_of(outline_color)
+        main_ow = max(0, int(outline_width))
+        trans_ow = max(1, int(outline_width) // 2) if outline_width > 0 else 0
+
         pair_sizes = []
         total_h = 0
         for mt, tt in active_lines:
             mh = th = 0
             mw = tw = 0
+            mtex = ttex = None
             if mt:
-                mw, mh = self._text_renderer.measure_text(
-                    mt, main_family, main_size, main_bold, max_w)
+                mtex, mw, mh = self._bake_text(
+                    mt, main_family, main_size, main_bold, main_color,
+                    _outline_rgb, main_ow, max_w, align)
             if tt:
-                tw, th = self._text_renderer.measure_text(
-                    tt, trans_family, trans_size, False, max_w)
+                ttex, tw, th = self._bake_text(
+                    tt, trans_family, trans_size, False, trans_color,
+                    _outline_rgb, trans_ow, max_w, align)
             pair_gap = line_spacing + 2 if tt else 0
             pair_h = mh + (th + pair_gap if tt else 0)
-            pair_sizes.append((mt, tt, mw, mh, tw, th, pair_h))
+            pair_sizes.append((mtex, mw, mh, ttex, tw, th, pair_h))
             total_h += pair_h
 
         # Add gaps between pairs
@@ -1722,65 +1795,30 @@ class Painter:
                 return node.abs_x + (node.width - tex_w) / 2
             return float(node.abs_x)  # left
 
-        # Second pass: render each pair
+        # Second pass: draw each pair (textures already cached)
         y = node.abs_y + max(0, (node.height - total_h) / 2)
-        for mt, tt, mw, mh, tw, th, pair_h in pair_sizes:
+        for mtex, mw, mh, ttex, tw, th, pair_h in pair_sizes:
             # Main text
-            if mt:
+            if mtex:
                 mx = _block_x(mw)
-                self._draw_lyrics_textured(mx, y, mw, mh,
-                                           self._text_renderer.render_to_texture(
-                                               mt, main_family, main_size, main_bold,
-                                               main_color, max_w, align),
-                                           node.opacity,
-                                           mt, main_family, main_size, main_bold,
-                                           outline_color, outline_width, max_w, align)
+                self._draw_textured_quad_at(mx, y, mw, mh, mtex, node.opacity)
             y += mh
 
             # Trans text
-            if tt:
+            if ttex:
                 tx = _block_x(tw)
                 ty = y + line_spacing + 2
-                self._draw_lyrics_textured(tx, ty, tw, th,
-                                           self._text_renderer.render_to_texture(
-                                               tt, trans_family, trans_size, False,
-                                               trans_color, max_w, align),
-                                           node.opacity * 0.95,
-                                           tt, trans_family, trans_size, False,
-                                           outline_color, max(1, outline_width // 2),
-                                           max_w, align)
+                self._draw_textured_quad_at(tx, ty, tw, th, ttex,
+                                            node.opacity * 0.95)
                 y = ty + th
             else:
                 y += line_spacing + 2
 
             y += inter_pair_gap
 
-    def _draw_lyrics_textured(
-        self, x, y, w, h, tex_id, opacity,
-        text, family, size, bold, outline_color, outline_width, max_w, align,
-    ):
-        """Draw a lyrics text texture with optional outline."""
-        if outline_width > 0:
-            if not outline_color or not outline_color.startswith("#"):
-                outline_color = "#000000"
-            outline_rgb = self._hex_to_rgb(outline_color)
-            outline_tex_id = self._text_renderer.render_to_texture(
-                text, family, size, bold, outline_rgb, max_w, align)
-            self._draw_with_outline_at(x, y, w, h, tex_id, outline_tex_id,
-                                       outline_width, opacity)
-        else:
-            self._draw_textured_quad_at(x, y, w, h, tex_id, opacity)
-
-    def _draw_with_outline_at(self, x, y, w, h, tex_id, outline_tex_id,
-                               outline_width, opacity):
-        """Draw outline offset in 8 directions, then main text on top."""
-        for dx in range(-outline_width, outline_width + 1):
-            for dy in range(-outline_width, outline_width + 1):
-                if dx == 0 and dy == 0:
-                    continue
-                self._draw_textured_quad_at(x + dx, y + dy, w, h,
-                                            outline_tex_id, opacity)
-        self._draw_textured_quad_at(x, y, w, h, tex_id, opacity)
+    # (_draw_lyrics_textured / _draw_with_outline_at removed — lyric outlines
+    # are now pre-composited into a single texture by _bake_text, 1 draw per
+    # block instead of 9.)
 
     # Legacy fallback — kept for backward compat
     def _get_lyrics_text(self, node):

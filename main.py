@@ -1,4 +1,4 @@
-"""Music CoverOverlay — Desktop music cover & status overlay for QQ Music & NetEase Cloud Music."""
+"""QQMusicOverlay NG — Desktop music cover & status overlay for QQ Music & NetEase Cloud Music."""
 import sys, os, time, queue, ctypes, threading, json
 
 # High-DPI
@@ -52,17 +52,17 @@ def main():
 
     # Single-instance mutex: prevents accidental double-launch.
     # If mutex exists, check if the owning process is still alive.
-    _mutex = _kernel32.CreateMutexW(None, False, "Music_CoverOverlay_SingleInstance")
+    _mutex = _kernel32.CreateMutexW(None, False, "QQMusicOverlayNG_SingleInstance")
     if _kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
         # Check if existing process is dead (stale mutex)
         _stale_pids = _find_overlay_pids()
         if not _stale_pids:
             # No overlay process found — stale mutex from crashed process
             _kernel32.CloseHandle(_mutex)
-            _mutex = _kernel32.CreateMutexW(None, False, "Music_CoverOverlay_SingleInstance")
+            _mutex = _kernel32.CreateMutexW(None, False, "QQMusicOverlayNG_SingleInstance")
         else:
             import tkinter.messagebox as _mb
-            _mb.showwarning("Music CoverOverlay", "应用已在运行中")
+            _mb.showwarning("QQMusicOverlay NG", "应用已在运行中")
             return
     _ = _mutex
 

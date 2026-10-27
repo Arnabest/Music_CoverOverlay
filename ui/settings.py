@@ -1,4 +1,4 @@
-"""Settings window — per-element tabs, working color pickers, X/Y position sliders.
+﻿"""Settings window — per-element tabs, working color pickers, X/Y position sliders.
 """
 import ctypes
 import os, sys, time
@@ -67,7 +67,7 @@ class SettingsWindow:
                 self.window.transient(_master)
             except Exception:
                 pass
-        self.window.title("Music CoverOverlay — 设置")
+        self.window.title("QQMusic Overlay NG — 设置")
         try:
             _icon = os.path.join(os.path.dirname(os.path.dirname(
                 os.path.abspath(__file__))), "assets", "app_icon.ico")
@@ -100,7 +100,7 @@ class SettingsWindow:
         titlebar = tk.Frame(self.window, bg=_SETTINGS_NAV, height=42, highlightthickness=0)
         titlebar.pack(side="top", fill="x")
         titlebar.pack_propagate(False)
-        title_label = tk.Label(titlebar, text="Music CoverOverlay  ·  设置", bg=_SETTINGS_NAV,
+        title_label = tk.Label(titlebar, text="QQMusic Overlay NG  ·  设置", bg=_SETTINGS_NAV,
                                fg=_SETTINGS_TEXT, font=("Microsoft YaHei UI", 10, "bold"), anchor="w")
         title_label.pack(side="left", fill="y", padx=14)
         close_btn = tk.Button(titlebar, text="×", command=self._on_close,
@@ -119,7 +119,7 @@ class SettingsWindow:
         self._nav = tk.Frame(shell, bg=_SETTINGS_NAV, width=172, highlightthickness=0)
         self._nav.grid(row=0, column=0, sticky="ns")
         self._nav.pack_propagate(False)
-        tk.Label(self._nav, text="MUSIC\nCOVEROVERLAY", bg=_SETTINGS_NAV, fg=_SETTINGS_TEXT,
+        tk.Label(self._nav, text="QQMUSIC\nOVERLAY NG", bg=_SETTINGS_NAV, fg=_SETTINGS_TEXT,
                  font=("Microsoft YaHei UI", 11, "bold"), anchor="w", justify="left"
                  ).pack(fill="x", padx=14, pady=(16, 2))
         tk.Label(self._nav, text="设置中心", bg=_SETTINGS_NAV, fg=_SETTINGS_MUTED,
@@ -352,7 +352,7 @@ class SettingsWindow:
                      size_cfg.get("height", 550), 200, 1500, 10, fmt=".0f", heavy=True); row += 1
         self._check(sf, row, "窗口置顶", self._kp("window.always_on_top"),
                     w.get("always_on_top", True)); row += 1
-        self._check(sf, row, "鼠标穿透 [提示] 开启后无法点击窗口，仅可通过托盘菜单操作",
+        self._check(sf, row, "鼠标穿透 ⚠ 开启后无法点击窗口，仅可通过托盘菜单操作",
                     self._kp("window.click_through"),
                     w.get("click_through", False)); row += 1
         # (OBS capture: use Display Capture + crop, or Spout when VS2022 available)
@@ -566,7 +566,7 @@ class SettingsWindow:
                     ["left", "center", "right"]); row += 1
         self._combo(sf, row, "显示行数", self._nk("lyrics", "max_lines"),
                     int(float(node.get("max_lines", 1))), [1, 2]); row += 1
-        self._check(sf, row, "双语显示 [提示] 翻译来自NetEase API，部分歌曲可能无翻译",
+        self._check(sf, row, "双语显示 ⚠ 翻译来自NetEase API，部分歌曲可能无翻译",
                     self._nk("lyrics", "bilingual"),
                     node.get("bilingual", True)); row += 1
 
@@ -614,7 +614,7 @@ class SettingsWindow:
         """Show a banner explaining that time/progress features are unavailable."""
         banner = tk.Frame(sf.inner, bg="#554400", relief="solid", bd=1)
         banner.pack(fill="x", padx=8, pady=12)
-        tk.Label(banner, text="当前播放源不提供播放进度",
+        tk.Label(banner, text="⚠ 当前播放源不提供播放进度",
                  fg="#ffcc44", bg="#554400",
                  font=("Microsoft YaHei", 11, "bold")).pack(pady=(8, 2))
         tk.Label(banner, text="时间进度和时长显示已自动关闭",
@@ -899,12 +899,12 @@ class SettingsWindow:
                      anim.get("fade_out_ms", 800), 100, 3000, 50); row += 1
         self._slider(sf, row, "显示停留(s)", self._kp("animation.stay_seconds"),
                      anim.get("stay_seconds", 8), 2, 120, 1); row += 1
-        self._check(sf, row, "常驻显示(不自动隐藏) [注意] 关闭后窗口将在几秒后自动隐藏",
+        self._check(sf, row, "常驻显示(不自动隐藏) ⚠ 关闭后窗口将在几秒后自动隐藏",
                     self._kp("animation.stay_forever"),
                     anim.get("stay_forever", False)); row += 1
         self._combo(sf, row, "渲染帧率", self._kp("animation.fps"),
                     int(anim.get("fps", 60)), [15, 30, 60, 120]); row += 1
-        hint = ttk.Label(sf.inner, text="[注意] 更改后需重启应用生效", foreground="#cc8844",
+        hint = ttk.Label(sf.inner, text="⚠ 更改后需重启应用生效", foreground="#cc8844",
                          background="#1e1e2e", font=("Microsoft YaHei", 9))
         hint.grid(row=row, column=1, columnspan=2, sticky="w", padx=4, pady=(0, 4)); row += 1
 
@@ -937,8 +937,8 @@ class SettingsWindow:
 
         # Fullscreen power saving
         _fs_labels = {"pause": "暂停旋转动画（全屏覆盖时停止封面旋转）",
-                       "30fps": "降至30fps（全屏覆盖时封面旋转上限30fps）",
-                       "15fps": "降至15fps（全屏覆盖时封面旋转上限15fps）"}
+                      "30fps": "降至30fps（全屏覆盖时封面旋转上限30fps）",
+                      "15fps": "降至15fps（全屏覆盖时封面旋转上限15fps）"}
         _fs_mode = anim.get("fullscreen_eco_mode", "pause")
         self._combo(sf, row, "全屏覆盖时旋转动画", self._kp("animation.fullscreen_eco_mode"),
                     _fs_mode, ["pause", "30fps", "15fps"], labels=_fs_labels, width=35); row += 1
@@ -950,7 +950,7 @@ class SettingsWindow:
 
         avail = self._available_renderers()
         renderer_val = anim.get("renderer", "pil")
-        self._combo(sf, row, "渲染后端", self._kp("animation.renderer"),
+        self._combo(sf, row, "渲染后端 ⚡", self._kp("animation.renderer"),
                     renderer_val, avail); row += 1
         gpu_note = "OpenGL=GPU加速" if "opengl" in avail else "OpenGL 不可用(需 pip install pyglet)"
         ttk.Label(sf.inner, text=f"※ pil=CPU软渲染 | {gpu_note} | 切换需重启",
@@ -974,13 +974,13 @@ class SettingsWindow:
         "qqmusic": {
             "name": "QQ音乐", "lyrics": True, "progress": True, "cover": True,
             "notes": [
-                "[注意] QQ音乐 API 不支持 7 分钟以上长音乐的播放进度精确定时",
+                "⚠ QQ音乐 API 不支持 7 分钟以上长音乐的播放进度精确定时",
             ],
         },
         "netease": {
             "name": "网易云音乐", "lyrics": True, "progress": False, "cover": True,
             "notes": [
-                "[注意] 网易云音乐 SMTC 不提供播放进度数据，无法显示进度条和时间",
+                "⚠ 网易云音乐 SMTC 不提供播放进度数据，无法显示进度条和时间",
             ],
         },
     }
@@ -1079,7 +1079,7 @@ class SettingsWindow:
             return
 
         def _row(cap: str, ok: bool) -> None:
-            icon = "[支持]" if ok else "[不支持]"
+            icon = "✅" if ok else "❌"
             fg = "#44cc88" if ok else "#cc4444"
             fr = tk.Frame(self._player_info_frame, bg="#2a2a3e")
             fr.pack(fill="x", padx=8, pady=2)
@@ -1194,14 +1194,14 @@ class SettingsWindow:
         # Refresh + Export buttons + restore
         btn_frame = ttk.Frame(sf.inner)
         btn_frame.pack(fill="x", padx=8, pady=(4, 8))
-        ttk.Button(btn_frame, text="刷新封面",
+        ttk.Button(btn_frame, text="🔄 刷新封面",
                    command=self._force_refresh_covers).pack(side="left", padx=4)
         ttk.Button(btn_frame, text="导出当前封面",
                    command=self._export_current_cover).pack(side="left", padx=4)
         ttk.Button(btn_frame, text="导出全部封面",
                    command=self._export_all_covers).pack(side="left", padx=4)
         # Restore button (hidden until auto-disable is applied)
-        self._restore_label = tk.Label(btn_frame, text="[提示] 已自动关闭部分显示",
+        self._restore_label = tk.Label(btn_frame, text="⚠ 已自动关闭部分显示",
                                        fg="#cc8844", bg="#1e1e2e",
                                        font=("Microsoft YaHei", 9))
         self._restore_btn = tk.Button(btn_frame, text="恢复显示选项",
@@ -1331,7 +1331,7 @@ class SettingsWindow:
             name_lbl.bind("<Button-1>", lambda e, i=idx: self._on_cover_select(i))
 
             if is_current:
-                tk.Label(card, text="[当前]", bg="#4444aa", fg="#44cc88",
+                tk.Label(card, text="✓ 当前", bg="#4444aa", fg="#44cc88",
                         font=("Microsoft YaHei", 8, "bold")).pack()
 
     def _on_cover_select(self, idx):
@@ -1653,9 +1653,9 @@ class SettingsWindow:
         # Toolbar
         bar = ttk.Frame(sf.inner)
         bar.pack(fill="x", padx=8, pady=4)
-        ttk.Button(bar, text="刷新列表",
+        ttk.Button(bar, text="🔄 刷新列表",
                    command=self._rebuild_cover_library).pack(side="left", padx=4)
-        ttk.Button(bar, text="清空缓存",
+        ttk.Button(bar, text="🗑 清空缓存",
                    command=self._clear_cover_cache).pack(side="left", padx=4)
 
         # Grid container
@@ -1833,12 +1833,9 @@ class SettingsWindow:
 
         # Version
         from version import get_version, get_short_version, get_build_stamp
-        ttk.Label(sf.inner, text="Music CoverOverlay", foreground="#ffffff",
+        ttk.Label(sf.inner, text="QQMusicOverlay NG", foreground="#ffffff",
                   background="#1e1e2e", font=("Microsoft YaHei", 16, "bold")
                   ).grid(row=row, column=0, columnspan=2, sticky="w", padx=12, pady=(12, 2)); row += 1
-        ttk.Label(sf.inner, text="适用于 QQ Music 和 NetEase Cloud Music 的封面悬浮窗程序",
-                  foreground="#aaaacc", background="#1e1e2e", font=("Microsoft YaHei", 9)
-                  ).grid(row=row, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 4)); row += 1
         ttk.Label(sf.inner, text=get_version(), foreground="#8888cc",
                   background="#1e1e2e", font=("Microsoft YaHei", 10)
                   ).grid(row=row, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 2)); row += 1
@@ -2469,7 +2466,7 @@ class SettingsWindow:
         name = info["name"]
         lines = [f"「{name}」不支持："]
         for m in missing:
-            lines.append(f"  - {m}")
+            lines.append(f"  ❌ {m}")
         lines.append("\n是否自动关闭相关显示选项？")
         return "\n".join(lines)
 
@@ -2590,7 +2587,7 @@ class SettingsWindow:
                 self._priority_popup_shown = True
                 import tkinter.messagebox as tkmb
                 want = tkmb.askyesno("功能缺失提醒",
-                                    warning + "\n\n提示：设置 → 来源 → 不再提示 可永久关闭",
+                                    warning + "\n\n💡 设置 → 来源 → 不再提示 可永久关闭",
                                     parent=self.window)
                 if want:
                     self._apply_missing_disable()
